@@ -81,4 +81,26 @@ type Response struct {
 	Body       io.Reader
 }
 
+// !Note: the type of the value of one header entry is
+// []string, which could consist of more than one string.
 type Header map[string][]string
+
+// The following methods (Add, Del, Get, Set) are the
+// same as the golang builtin methods.
+// Refer to https://golang.org/pkg/net/http/#Header.
+func (h Header) Add(key, value string) {
+	// TODO
+}
+
+func (h Header) Del(key string) {
+	// TODO
+}
+
+func (h Header) Get(key string) string {
+	// TODO
+	return ""
+}
+
+func (h Header) Set(key, value string) {
+	// TODO
+}

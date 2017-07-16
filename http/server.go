@@ -34,7 +34,9 @@ func (srv *Server) Shutdown() (err error) {
 	return
 }
 
-// Start listen and http service
+// Start listen and http service.
+// The method is blocking, which doesn't return until other
+// goroutines shutdown the server.
 func (srv *Server) ListenAndServe() (err error) {
 	// TODO
 	// listen on the specific port, then call Serve()
