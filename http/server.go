@@ -17,7 +17,7 @@ type Handler interface {
 	ServeHTTP(*Response, *Request)
 }
 
-type HandlerFunc func(Response, *Request)
+type HandlerFunc func(*Response, *Request)
 
 func (s *Server) AddHandler(path string, handler Handler) {
 	// TODO
