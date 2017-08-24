@@ -10,7 +10,7 @@ import (
 func main() {
 	server := &http.Server{Addr: ":8080"}
 
-	server.AddHandlerFunc("/index", func(w http.Response, r *http.Request) {
+	server.AddHandlerFunc("/index", func(w *http.Response, r *http.Request) {
 		// logics
 		fmt.Println("Response to /index")
 	})
