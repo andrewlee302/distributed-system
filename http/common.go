@@ -2,105 +2,108 @@ package http
 
 import (
 	"io"
+	"net/url"
 )
 
 // RFC2616 Method
 const (
-	MethodGet     = "GET"
-	MethodHead    = "HEAD"
-	MethodPost    = "POST"
-	MethodPut     = "PUT"
-	MethodDelete  = "DELETE"
-	MethodConnect = "CONNECT"
-	MethodOptions = "OPTIONS"
-	MethodTrace   = "TRACE"
+	MethodGet  = "GET"
+	MethodPost = "POST"
 )
 
-// RFC2616 Status Code
+// HTTP literal constants.
 const (
-	StatusContinue           = 100
-	StatusSwitchingProtocols = 101
+	// HTTPVersion is unique http proto here.
+	HTTPVersion = "HTTP/1.1"
 
-	StatusOK                   = 200
-	StatusCreated              = 201
-	StatusAccepted             = 202
-	StatusNonAuthoritativeInfo = 203
-	StatusNoContent            = 204
-	StatusResetContent         = 205
-	StatusPartialContent       = 206
-
-	StatusMultipleChoices  = 300
-	StatusMovedPermanently = 301
-	StatusFound            = 302
-	StatusSeeOther         = 303
-	StatusNotModified      = 304
-	StatusUseProxy         = 305
-
-	StatusTemporaryRedirect = 307
-
-	StatusBadRequest                   = 400
-	StatusUnauthorized                 = 401
-	StatusPaymentRequired              = 402
-	StatusForbidden                    = 403
-	StatusNotFound                     = 404
-	StatusMethodNotAllowed             = 405
-	StatusNotAcceptable                = 406
-	StatusProxyAuthRequired            = 407
-	StatusRequestTimeout               = 408
-	StatusConflict                     = 409
-	StatusGone                         = 410
-	StatusLengthRequired               = 411
-	StatusPreconditionFailed           = 412
-	StatusRequestEntityTooLarge        = 413
-	StatusRequestURITooLong            = 414
-	StatusUnsupportedMediaType         = 415
-	StatusRequestedRangeNotSatisfiable = 416
-	StatusExpectationFailed            = 417
-
-	StatusInternalServerError     = 500
-	StatusNotImplemented          = 501
-	StatusBadGateway              = 502
-	StatusServiceUnavailable      = 503
-	StatusGatewayTimeout          = 504
-	StatusHTTPVersionNotSupported = 505
+	HeaderContentLength    = "Content-Length"
+	HeaderHost             = "Host"
+	HeaderContentTypeValue = "text/plain"
 )
 
+// Buffer size.
+const (
+	ServerRequestBufSize  = 256
+	ServerResponseBufSize = 256
+	ClientResponseBufSize = 256
+	ClientRequestBufSize  = 256
+	WriteBuffInitSize     = 25
+)
+
+//
+// -------- Request --------
+// Request = Request-Line
+//            *(( general-header | request-header | entity-header ) CRLF)
+//           CRLF
+//           [message-body]
+// Request-Line = Method SP Request-URI SP HTTP-Version CRLF
+// Header = Key: Value CRLF
+// -------- Response -------
+// Response = Status-Line
+//           *(( general-header | response-header | entity-header ) CRLF)
+//           CRLF
+//           [ message-body ]
+// Status-Line = HTTP-Version SP Status-Code SP Reason-Phrase CRLF
+// Header = Key: Value CRLF
+
+// Request for http request.
 type Request struct {
 	Method string
-	URL    string
+	URL    *url.URL
 	Proto  string
-	Header Header
-	Body   io.Reader
+
+	// Header is key-value pair for simplicity.
+	Header        map[string]string
+	ContentLength int64
+	Body          io.Reader
 }
 
+// Response for http Response.
 type Response struct {
 	Status     string
 	StatusCode int
 	Proto      string
-	Header     Header
-	Body       io.Reader
+
+	// Header is key-value pair for simplicity.
+	Header        map[string]string
+	ContentLength int64
+
+	// TODO refine
+	// Body represents the response body.
+	//
+	// The http Client and Transport guarantee that Body is always
+	// non-nil, even on responses without a body or responses with
+	// a zero-length body. It is the caller's responsibility to
+	// close Body. The default HTTP client's Transport does not
+	// attempt to reuse HTTP/1.0 or HTTP/1.1 TCP connections
+	// ("keep-alive") unless the Body is read to completion and is
+	// closed.
+	Body io.Reader
+
+	// Your data here.
+	writeBuff []byte
 }
 
-// !Note: the type of the value of one header entry is
-// []string, which could consist of more than one string.
-type Header map[string][]string
-
-// The following methods (Add, Del, Get, Set) are the
-// same as the golang builtin methods.
-// Refer to https://golang.org/pkg/net/http/#Header.
-func (h Header) Add(key, value string) {
-	// TODO
+// For HTTP/1.1 requests, handlers should read any
+// needed request body data before writing the response.
+func (resp *Response) Write(data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	resp.ContentLength += int64(len(data))
+	if resp.writeBuff == nil {
+		resp.writeBuff = make([]byte, 0, WriteBuffInitSize)
+	}
+	resp.writeBuff = append(resp.writeBuff, data...)
 }
 
-func (h Header) Del(key string) {
+// WriteStatus sends status code.
+func (resp *Response) WriteStatus(code int) {
 	// TODO
-}
-
-func (h Header) Get(key string) string {
-	// TODO
-	return ""
-}
-
-func (h Header) Set(key, value string) {
-	// TODO
+	status, ok := statusText[code]
+	if !ok {
+		panic("Code doesn't exist in HTTP/1.1(RFC2616) protocol")
+	}
+	resp.StatusCode = code
+	resp.Status = status
 }
