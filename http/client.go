@@ -124,7 +124,7 @@ func (c *Client) Send(req *Request) (resp *Response, err error) {
 		return nil, errors.New("http: nil Request.URL")
 	}
 
-	// reuse logics
+	// Reuse logics
 	tc, err := c.getConn(req.URL.Host)
 	if err != nil {
 		return nil, err
@@ -154,7 +154,7 @@ func (c *Client) putConn(tc *net.TCPConn, host string) {
 	if ok {
 		// fmt.Println("put back conn")
 		tcpConns.PushBack(tc)
-		c.cond.Signal()
+		c.cond.Broadcast()
 	} else {
 		panic("not here")
 	}
@@ -162,7 +162,6 @@ func (c *Client) putConn(tc *net.TCPConn, host string) {
 
 func (c *Client) getConn(host string) (tc *net.TCPConn, err error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	tcpConns, ok := c.tcpConnPool[host]
 	if !ok {
 		tcpConns = list.New()
@@ -174,7 +173,10 @@ func (c *Client) getConn(host string) (tc *net.TCPConn, err error) {
 	}
 
 	if tcpConns.Front() == nil {
-		// new tcp connection
+		// *** The following code should be here instead of the end of the block.
+		atomic.AddInt64(&c.connSize, 1)
+		c.mu.Unlock()
+		// New tcp connection
 		tcpAddr, err := net.ResolveTCPAddr("tcp", host)
 		if err != nil {
 			return nil, err
@@ -183,15 +185,15 @@ func (c *Client) getConn(host string) (tc *net.TCPConn, err error) {
 		if err != nil {
 			return nil, err
 		}
-		atomic.AddInt64(&c.connSize, 1)
 
 	} else {
-		// reuse
+		// Reuse
 		// fmt.Println(atomic.AddInt64(&reuseCnt, 1))
 		if ele := tcpConns.Front(); ele != nil {
 			tc = ele.Value.(*net.TCPConn)
 			tcpConns.Remove(ele)
-			c.cond.Signal()
+			c.cond.Broadcast()
+			c.mu.Unlock()
 		} else {
 			panic("not here")
 		}
@@ -204,7 +206,7 @@ func (c *Client) getConn(host string) (tc *net.TCPConn, err error) {
 func (c *Client) cleanConn(tc *net.TCPConn, req *Request) {
 	tc.Close()
 	atomic.AddInt64(&c.connSize, -1)
-	c.cond.Signal()
+	c.cond.Broadcast()
 }
 
 // Send the request to tcp stream.
@@ -251,7 +253,7 @@ func writeReq(tcpConn *net.TCPConn, req *Request) (err error) {
 // err is not nil if tcp conn occurs, of course req is nil.
 func readResp(tcpConn *net.TCPConn, req *Request) (*Response, error) {
 
-	// receive and prase repsonse message
+	// Receive and prase repsonse message
 	resp := &Response{Header: make(map[string]string)}
 	reader := bufio.NewReaderSize(tcpConn, ClientResponseBufSize)
 	var wholeLine []byte
@@ -261,13 +263,13 @@ LOOP:
 	for {
 		if line, isWait, err := reader.ReadLine(); err == nil {
 			if !isWait {
-				// complete line
+				// Complete line
 				if !lastWait {
 					wholeLine = line
 				} else {
 					wholeLine = append(wholeLine, line...)
 				}
-				// process the line
+				// Process the line
 				switch step {
 				case ResponseStepStatusLine:
 					{
@@ -294,7 +296,7 @@ LOOP:
 							cLen, _ := strconv.ParseInt(cLenStr, 10, 64)
 							resp.ContentLength = cLen
 
-							// transfer the body to Response
+							// Transfer the body to Response
 							resp.Body = &io.LimitedReader{
 								R: reader,
 								N: resp.ContentLength,
@@ -309,7 +311,7 @@ LOOP:
 				}
 
 			} else {
-				// not complete
+				// Not complete
 				if !lastWait {
 					wholeLine = line
 				} else {

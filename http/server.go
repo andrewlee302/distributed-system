@@ -219,7 +219,7 @@ const (
 // Serve a new connection.
 func (hc *httpConn) serve() {
 	// TODO
-	// receive and prase request message
+	// Receive and prase request message
 	for {
 		req, err := hc.readReq()
 		if err != nil {
@@ -232,7 +232,7 @@ func (hc *httpConn) serve() {
 		handler := hc.srv.match(req.URL.Path)
 		handler.ServeHTTP(resp, req)
 
-		// *** discard rest of request body.
+		// *** Discard rest of request body.
 		io.Copy(ioutil.Discard, req.Body)
 
 		err = hc.writeResp(resp)
@@ -252,7 +252,7 @@ func (hc *httpConn) close() {
 }
 
 // err is not nil if tcp conn occurs.
-// must write the HEADER_CONTENT_LENGTH header.
+// Must write the HEADER_CONTENT_LENGTH header.
 func (hc *httpConn) writeResp(resp *Response) (err error) {
 	writer := bufio.NewWriterSize(hc.tcpConn, ServerResponseBufSize)
 	_, err = writer.WriteString(fmt.Sprintf("%s %d %s\n", resp.Proto, resp.StatusCode, resp.Status))
@@ -295,13 +295,13 @@ LOOP:
 	for {
 		if line, isWait, err := reader.ReadLine(); err == nil {
 			if !isWait {
-				// complete line
+				// Complete line
 				if !lastWait {
 					wholeLine = line
 				} else {
 					wholeLine = append(wholeLine, line...)
 				}
-				// process the line
+				// Process the line
 				switch step {
 				case RequestStepRequestLine:
 					{
@@ -363,7 +363,7 @@ LOOP:
 				}
 
 			} else {
-				// not complete
+				// Not complete
 				if !lastWait {
 					wholeLine = line
 				} else {

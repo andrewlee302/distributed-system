@@ -21,10 +21,8 @@ func main() {
 	}
 	HTTPHost := "http://" + ServerAddr
 
-	c := http.NewClientSize(1)
-
-	fmt.Printf("Test: Concurrent perf of your client ...\n")
-	incrNum, decrNum := 2500, 2500
+	c := http.NewClientSize(100)
+	incrNum, decrNum := 10, 10
 	type Status struct {
 		flag bool
 		url  string
@@ -69,7 +67,7 @@ func main() {
 				fmt.Printf("Get(%v) failed, error:%v", status.url, status.err)
 				return
 			}
-		case <-time.After(time.Millisecond * 500):
+		case <-time.After(time.Millisecond * 5000):
 			fmt.Println("wait reply timeout")
 		}
 	}

@@ -16,7 +16,7 @@ import (
 
 // Server host.
 const (
-	ServerAddr = "localhost:8080"
+	ServerAddr = "localhost:9000"
 	HTTPHost   = "http://" + ServerAddr
 )
 
@@ -210,16 +210,16 @@ func TestServerConcurrence(t *testing.T) {
 
 	server.AddHandlerFunc("/value", wrapYourValueFunc(&value))
 
-	incrNum, decrNum := 100, 50
+	incrNumReq, decrNumReq := 50, 50
 	type Status struct {
 		flag bool
 		url  string
 		err  error
 	}
 	start := time.Now()
-	waitComplete := make(chan Status, incrNum+decrNum)
+	waitComplete := make(chan Status, incrNumReq+decrNumReq)
 	go func() {
-		for i := 0; i < incrNum; i++ {
+		for i := 0; i < incrNumReq; i++ {
 			go func(ii int) {
 				if resp, err := c.Post(HTTPHost+"/add", HeaderContentTypeValue, strings.NewReader("1")); err != nil || resp == nil {
 					waitComplete <- Status{flag: false, url: "/add", err: err}
@@ -231,7 +231,7 @@ func TestServerConcurrence(t *testing.T) {
 	}()
 
 	go func() {
-		for i := 0; i < decrNum; i++ {
+		for i := 0; i < decrNumReq; i++ {
 			go func(ii int) {
 				if resp, err := c.Post(HTTPHost+"/add", HeaderContentTypeValue, strings.NewReader("-1")); err != nil || resp == nil {
 					waitComplete <- Status{flag: false, url: "/add", err: err}
@@ -248,14 +248,14 @@ func TestServerConcurrence(t *testing.T) {
 			if !status.flag {
 				t.Fatalf("Get(%v) failed, error:%v", status.url, status.err)
 			}
-		case <-time.After(time.Millisecond * 50):
+		case <-time.After(time.Millisecond * 500):
 			t.Fatalf("wait reply timeout")
 		}
 	}
 	elapsed := time.Since(start)
 	fmt.Printf("Cost: %v ms\n", elapsed.Nanoseconds()/int64(time.Millisecond))
 
-	expectedValue := int64(incrNum - decrNum)
+	expectedValue := int64(incrNumReq - decrNumReq)
 	if value != expectedValue {
 		t.Fatalf("value=%v, expected=%v", value, expectedValue)
 	}
@@ -312,20 +312,20 @@ func TestClientConcurrence(t *testing.T) {
 	serverMux.HandleFunc("/add", wrapGoAddFunc(&value))
 	serverMux.HandleFunc("/value", wrapGoValueFunc(&value))
 
-	c := NewClientSize(1)
+	c := NewClientSize(100)
 
 	fmt.Printf("Test: Concurrent perf of your client ...\n")
-	incrNum, decrNum := 2500, 2500
+	incrReqNum, decrReqNum := 5000, 5000
 	type Status struct {
 		flag bool
 		url  string
 		err  error
 	}
 
-	waitComplete := make(chan Status, incrNum+decrNum)
+	waitComplete := make(chan Status, incrReqNum+decrReqNum)
 	start := time.Now()
 	go func() {
-		for i := 0; i < incrNum; i++ {
+		for i := 0; i < incrReqNum; i++ {
 			go func(ii int) {
 				reqBodyData := []byte("1")
 
@@ -340,7 +340,7 @@ func TestClientConcurrence(t *testing.T) {
 	}()
 
 	go func() {
-		for i := 0; i < decrNum; i++ {
+		for i := 0; i < decrReqNum; i++ {
 			go func(ii int) {
 				reqBodyData := []byte("-1")
 				if resp, err := c.Post(HTTPHost+"/add", int64(len(reqBodyData)),
@@ -363,14 +363,19 @@ func TestClientConcurrence(t *testing.T) {
 			t.Fatalf("wait reply timeout")
 		}
 	}
-	elapsed := time.Since(start)
-	fmt.Printf("Cost: %v ms\n", elapsed.Nanoseconds()/int64(time.Millisecond))
+	elapsedMs := time.Since(start).Nanoseconds() / int64(time.Millisecond)
 
-	expectedValue := int64(incrNum - decrNum)
+	fmt.Printf("Cost: %v ms\n", elapsedMs)
+
+	expectedValue := int64(incrReqNum - decrReqNum)
 	if value != expectedValue {
 		t.Fatalf("value=%v, expected=%v", value, expectedValue)
 	}
 	checkYourClient(t, c, "/value", MethodGet, []byte{}, StatusOK, []byte(strconv.Itoa(int(value))))
+
+	if elapsedMs > 500 {
+		t.Fatalf("%v concurent client requests cost too much time: %v, expected < %v\n", incrReqNum+decrReqNum, elapsedMs, 1000)
+	}
 
 	server.Close()
 	if err := <-sCloseChan; err == nil {

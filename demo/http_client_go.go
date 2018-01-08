@@ -62,7 +62,7 @@ func main() {
 				fmt.Printf("Get(%v) failed, error:%v\n", status.url, status.err)
 				return
 			}
-		case <-time.After(time.Millisecond * 50):
+		case <-time.After(time.Millisecond * 5000):
 			fmt.Println("wait reply timeout")
 		}
 	}
