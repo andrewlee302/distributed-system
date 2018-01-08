@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -9,12 +10,15 @@ import (
 	"sync/atomic"
 )
 
-const (
-	ServerAddr = "localhost:8080"
-	HTTPHost   = "http://" + ServerAddr
-)
-
 func main() {
+	var ServerAddr string
+	flag.StringVar(&ServerAddr, "server_addr", "", "e.g. localhost:8080")
+	flag.Parse()
+	if ServerAddr == "" {
+		flag.PrintDefaults()
+		return
+	}
+
 	serverMux := http.NewServeMux()
 	var value int64
 	serverMux.HandleFunc("/add", wrapGoAddFunc(&value))

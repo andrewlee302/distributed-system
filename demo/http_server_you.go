@@ -2,6 +2,7 @@ package main
 
 import (
 	"distributed-system/http"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -9,12 +10,15 @@ import (
 	"sync/atomic"
 )
 
-const (
-	ServerAddr = "localhost:8080"
-	HTTPHost   = "http://" + ServerAddr
-)
-
 func main() {
+	var ServerAddr string
+	flag.StringVar(&ServerAddr, "server_addr", "", "e.g. localhost:8080")
+	flag.Parse()
+	if ServerAddr == "" {
+		flag.PrintDefaults()
+		return
+	}
+
 	server := http.NewServer(ServerAddr)
 	var value int64
 	server.AddHandlerFunc("/add", wrapYourAddFunc(&value))
