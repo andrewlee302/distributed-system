@@ -7,6 +7,7 @@ package http
 
 import (
 	"bufio"
+	"container/list"
 	"errors"
 	"fmt"
 	"io"
@@ -16,19 +17,35 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // Client send the http request and recevice response.
 //
 // Supports concurrency.
 type Client struct {
-	tcpConns map[string]*net.TCPConn // host(hostname:port) -> TCPConn
-	mu       sync.Mutex
+	tcpConnPool map[string](*list.List) // host(hostname:port) -> TCPConns
+	connSize    int64
+	maxConnSize int64
+	mu          sync.Mutex
+	cond        sync.Cond
 }
 
-// NewClient initilize a Client
+// DefaultMaxConnSize is the default max size of tcp connection pool.
+const DefaultMaxConnSize = 500
+
+// NewClient initilize a Client with DefaultMaxPoolSize
 func NewClient() *Client {
-	return &Client{tcpConns: make(map[string]*net.TCPConn)}
+	c := &Client{tcpConnPool: make(map[string](*list.List)), maxConnSize: DefaultMaxConnSize}
+	c.cond = sync.Cond{L: &c.mu}
+	return c
+}
+
+// NewClientSize initilize a Client with a specific maxPoolSize.
+func NewClientSize(maxConnSize int64) *Client {
+	c := &Client{tcpConnPool: make(map[string](*list.List)), maxConnSize: maxConnSize}
+	c.cond = sync.Cond{L: &c.mu}
+	return c
 }
 
 // Get implements GET Method of HTTP/1.1.
@@ -106,39 +123,88 @@ func (c *Client) Send(req *Request) (resp *Response, err error) {
 	if req.URL == nil {
 		return nil, errors.New("http: nil Request.URL")
 	}
-	// reuse logics
-	c.mu.Lock()
-	tcpConn, ok := c.tcpConns[req.URL.Host]
-	if !ok {
-		tcpAddr, err := net.ResolveTCPAddr("tcp", req.URL.Host)
-		if err != nil {
-			return nil, err
-		}
-		tcpConn, err = net.DialTCP("tcp", nil, tcpAddr)
-		if err != nil {
-			return nil, err
-		}
-		c.tcpConns[req.URL.Host] = tcpConn
-	}
-	c.mu.Unlock()
 
-	err = writeReq(tcpConn, req)
+	// reuse logics
+	tc, err := c.getConn(req.URL.Host)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		c.cleanConn(tcpConn, req)
 		return nil, err
 	}
-	resp, err = readResp(tcpConn, req)
+
+	err = writeReq(tc, req)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		c.cleanConn(tcpConn, req)
+		c.cleanConn(tc, req)
+		return nil, err
 	}
+	resp, err = readResp(tc, req)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		c.cleanConn(tc, req)
+	}
+	c.putConn(tc, req.URL.Host)
 	return
 }
 
-func (c *Client) cleanConn(tcpConn *net.TCPConn, req *Request) {
-	tcpConn.Close()
-	delete(c.tcpConns, req.URL.Host)
+var reuseCnt = int64(0)
+
+func (c *Client) putConn(tc *net.TCPConn, host string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	tcpConns, ok := c.tcpConnPool[host]
+	if ok {
+		// fmt.Println("put back conn")
+		tcpConns.PushBack(tc)
+		c.cond.Signal()
+	} else {
+		panic("not here")
+	}
+}
+
+func (c *Client) getConn(host string) (tc *net.TCPConn, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	tcpConns, ok := c.tcpConnPool[host]
+	if !ok {
+		tcpConns = list.New()
+		c.tcpConnPool[host] = tcpConns
+	}
+
+	for tcpConns.Front() == nil && atomic.LoadInt64(&c.connSize) >= c.maxConnSize {
+		c.cond.Wait()
+	}
+
+	if tcpConns.Front() == nil {
+		// new tcp connection
+		tcpAddr, err := net.ResolveTCPAddr("tcp", host)
+		if err != nil {
+			return nil, err
+		}
+		tc, err = net.DialTCP("tcp", nil, tcpAddr)
+		if err != nil {
+			return nil, err
+		}
+		atomic.AddInt64(&c.connSize, 1)
+
+	} else {
+		// reuse
+		// fmt.Println(atomic.AddInt64(&reuseCnt, 1))
+		if ele := tcpConns.Front(); ele != nil {
+			tc = ele.Value.(*net.TCPConn)
+			tcpConns.Remove(ele)
+			c.cond.Signal()
+		} else {
+			panic("not here")
+		}
+
+	}
+	return tc, err
+}
+
+// close one connection.
+func (c *Client) cleanConn(tc *net.TCPConn, req *Request) {
+	tc.Close()
+	atomic.AddInt64(&c.connSize, -1)
+	c.cond.Signal()
 }
 
 // Send the request to tcp stream.
@@ -206,7 +272,7 @@ LOOP:
 				case ResponseStepStatusLine:
 					{
 						statusLineWords := strings.SplitN(string(wholeLine), " ", 3)
-						fmt.Println(statusLineWords)
+						// fmt.Println(statusLineWords)
 						resp.Proto = statusLineWords[0]
 						resp.StatusCode, err = strconv.Atoi(statusLineWords[1])
 						resp.Status = statusLineWords[2]
@@ -219,7 +285,7 @@ LOOP:
 							resp.Header[headerWords[0]] = headerWords[1]
 
 						} else {
-							fmt.Println(resp.Header)
+							// fmt.Println(resp.Header)
 							step = ResponseStepBody
 							cLenStr, ok := resp.Header[HeaderContentLength]
 							if !ok {

@@ -22,7 +22,6 @@ import (
 	"io/ioutil"
 	"net"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,11 +33,11 @@ type Server struct {
 	Addr *net.TCPAddr
 
 	// Your data here.
-	handlers map[string]Handler
-	l        *net.TCPListener
-	mu       sync.Mutex
-	doneChan chan struct{}
-	closed   bool
+	handlers   map[string]Handler
+	l          *net.TCPListener
+	mu         sync.Mutex
+	activeConn map[*httpConn]struct{}
+	doneChan   chan struct{}
 }
 
 // NewServer initilizes the server of the speficif host.
@@ -53,7 +52,7 @@ func NewServer(host string) (s *Server) {
 	// Your initialization code here.
 	srv.handlers = make(map[string]Handler)
 	srv.doneChan = make(chan struct{})
-	srv.closed = false
+	srv.activeConn = make(map[*httpConn]struct{})
 	return srv
 }
 
@@ -135,56 +134,66 @@ func pathMatch(pattern, path string) bool {
 	return len(path) >= n && path[0:n] == pattern
 }
 
-// Shutdown the server without interrupting any active
-// connections.
-func (srv *Server) Shutdown() (err error) {
+// Close immediately closes active net.Listener and any
+// active connections.
+//
+// Close returns any error returned from closing the Server's
+// underlying Listener.
+func (srv *Server) Close() (err error) {
 	// TODO
-	close(srv.doneChan)
-	srv.l.Close()
-	return
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+
+	select {
+	case <-srv.doneChan:
+		// Already closed. Don't close again.
+	default:
+		// Safe to close here. We're the only closer, guarded
+		// by s.mu.
+		close(srv.doneChan)
+	}
+	err = srv.l.Close()
+	for c := range srv.activeConn {
+		c.tcpConn.Close()
+		delete(srv.activeConn, c)
+	}
+	return err
 }
 
-// ListenAndServe start listening and http service.
+// ErrServerClosed is returned by the Server's Serve, ListenAndServe,
+// and ListenAndServeTLS methods after a call to Shutdown or Close.
+var ErrServerClosed = errors.New("http: Server closed")
+
+// ListenAndServe start listening and serve http connections.
 // The method is blocking, which doesn't return until other
-// goroutines shutdown the server.
+// goroutines close the server.
 func (srv *Server) ListenAndServe() (err error) {
 	// TODO
 	// listen on the specific tcp addr, then call Serve()
 	l, err := net.ListenTCP("tcp", srv.Addr)
+	defer l.Close()
 	if err != nil {
 		return
 	}
-	err = srv.Serve(l)
-	l.Close()
-	return err
-}
-
-// ErrServerClosed is returned by the Server's Serve and
-// ListenAndServe methods after a call to Shutdown.
-var ErrServerClosed = errors.New("http: Server closed")
-
-// Serve the http connections. Blocking method.
-// The service supports concurrency connections.
-// Return ErrServerClosed after a call to Shutdown.
-func (srv *Server) Serve(l *net.TCPListener) (err error) {
 	// wait loop for accepting new connection (httpConn), then
 	// serve in the asynchronous style.
 	srv.l = l
-	for !srv.closed {
+	for {
 		rw, err := l.Accept()
-
 		if err != nil {
 			select {
 			case <-srv.doneChan:
-				return err
+				return ErrServerClosed
 			default:
 			}
 			return err
 		}
 		c := srv.newConn(rw.(*net.TCPConn))
+		srv.mu.Lock()
+		srv.activeConn[c] = struct{}{}
+		srv.mu.Unlock()
 		go c.serve()
 	}
-	return err
 }
 
 func (srv *Server) newConn(conn *net.TCPConn) *httpConn {
@@ -214,8 +223,8 @@ func (hc *httpConn) serve() {
 	for {
 		req, err := hc.readReq()
 		if err != nil {
-			// fmt.Fprintln(os.Stderr, err)
-			hc.clean()
+
+			hc.close()
 			return
 		}
 		resp := &Response{Proto: HTTPVersion, Header: make(map[string]string)}
@@ -228,15 +237,18 @@ func (hc *httpConn) serve() {
 
 		err = hc.writeResp(resp)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			hc.clean()
+			hc.close()
 			return
 		}
 	}
 }
 
-func (hc *httpConn) clean() {
+func (hc *httpConn) close() {
+	// fmt.Fprintln(os.Stderr, err)
+	hc.srv.mu.Lock()
+	defer hc.srv.mu.Unlock()
 	hc.tcpConn.Close()
+	delete(hc.srv.activeConn, hc)
 }
 
 // err is not nil if tcp conn occurs.

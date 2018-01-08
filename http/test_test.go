@@ -2,7 +2,6 @@ package http
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"io/ioutil"
 	go_http "net/http"
@@ -21,32 +20,38 @@ const (
 	HTTPHost   = "http://" + ServerAddr
 )
 
-func setupYourServer() *Server {
-	server := NewServer(ServerAddr)
+func setupYourServer() (server *Server, ch chan error) {
+	ch = make(chan error)
+	server = NewServer(ServerAddr)
 
 	// start server
 	go func() {
-		if err := server.ListenAndServe(); err != nil {
-			fmt.Fprintln(os.Stderr, err.Error())
+		if err := server.ListenAndServe(); err != nil && err != ErrServerClosed {
+			ch <- err
 		} else {
-			fmt.Println("Start server")
+			close(ch)
 		}
 	}()
-	return server
+	time.Sleep(time.Second)
+	return server, ch
 }
 
-func setupGoServer() (*go_http.Server, *go_http.ServeMux) {
-	serverMux := go_http.NewServeMux()
-	server := &go_http.Server{
+func setupGoServer() (server *go_http.Server, serverMux *go_http.ServeMux, ch chan error) {
+	ch = make(chan error)
+	serverMux = go_http.NewServeMux()
+	server = &go_http.Server{
 		Addr:    ServerAddr,
 		Handler: serverMux,
 	}
 	go func() {
-		if err := server.ListenAndServe(); err != nil {
-			fmt.Println(err)
+		if err := server.ListenAndServe(); err != nil && err != go_http.ErrServerClosed {
+			ch <- err
+		} else {
+			close(ch)
 		}
 	}()
-	return server, serverMux
+	time.Sleep(time.Second)
+	return server, serverMux, ch
 }
 
 func setOKResponse(resp *Response) {
@@ -117,16 +122,16 @@ func wrapYourAddFunc(value *int64) func(resp *Response, req *Request) {
 			fmt.Fprintln(os.Stderr, err)
 		}
 		atomic.AddInt64(value, delta)
-		resp.Write([]byte{})
 		resp.WriteStatus(StatusOK)
+		resp.Write([]byte{})
 	}
 }
 
 // Value closure. Respond with the value.
 func wrapYourValueFunc(value *int64) func(resp *Response, req *Request) {
 	return func(resp *Response, req *Request) {
-		resp.Write([]byte(strconv.FormatInt(atomic.LoadInt64(value), 10)))
 		resp.WriteStatus(StatusOK)
+		resp.Write([]byte(strconv.FormatInt(atomic.LoadInt64(value), 10)))
 	}
 }
 
@@ -143,7 +148,7 @@ func wrapGoAddFunc(value *int64) func(resp go_http.ResponseWriter, req *go_http.
 			fmt.Fprintln(os.Stderr, err)
 		}
 		atomic.AddInt64(value, delta)
-		resp.WriteHeader(StatusOK)
+		resp.WriteHeader(go_http.StatusOK)
 		resp.Write([]byte{})
 	}
 }
@@ -151,7 +156,7 @@ func wrapGoAddFunc(value *int64) func(resp go_http.ResponseWriter, req *go_http.
 // Value closure for golang standard server. Respond with the value.
 func wrapGoValueFunc(value *int64) func(resp go_http.ResponseWriter, req *go_http.Request) {
 	return func(resp go_http.ResponseWriter, req *go_http.Request) {
-		resp.WriteHeader(StatusOK)
+		resp.WriteHeader(go_http.StatusOK)
 		resp.Write([]byte(strconv.FormatInt(atomic.LoadInt64(value), 10)))
 	}
 }
@@ -160,7 +165,7 @@ func wrapGoValueFunc(value *int64) func(resp go_http.ResponseWriter, req *go_htt
 // * Serial GET (/value) and POST(/add) requests and responses.
 // * User-defined handler.
 func TestServerBasic(t *testing.T) {
-	server := setupYourServer()
+	server, sCloseChan := setupYourServer()
 	c := new(go_http.Client)
 	var value int64
 
@@ -182,18 +187,24 @@ func TestServerBasic(t *testing.T) {
 	}
 	checkYourServer(t, c, "/value", MethodGet, []byte{}, StatusOK, []byte(strconv.Itoa(int(value))))
 
-	server.Shutdown()
+	server.Close()
+	if err := <-sCloseChan; err == nil {
+		fmt.Printf("Server closed\n")
+	} else {
+		t.Fatalf("%v", err)
+	}
+
 	fmt.Printf("  ... Passed\n")
 }
 
 // Test the concurrency feature of your server.
 func TestServerConcurrence(t *testing.T) {
 	runtime.GOMAXPROCS(8)
-	server := setupYourServer()
+	server, sCloseChan := setupYourServer()
 	c := new(go_http.Client)
 	var value int64
 
-	fmt.Printf("Test: Concurrent requests to your server ...\n")
+	fmt.Printf("Test: Concurrent perf of your server ...\n")
 
 	server.AddHandlerFunc("/add", wrapYourAddFunc(&value))
 
@@ -205,7 +216,7 @@ func TestServerConcurrence(t *testing.T) {
 		url  string
 		err  error
 	}
-
+	start := time.Now()
 	waitComplete := make(chan Status, incrNum+decrNum)
 	go func() {
 		for i := 0; i < incrNum; i++ {
@@ -223,7 +234,7 @@ func TestServerConcurrence(t *testing.T) {
 		for i := 0; i < decrNum; i++ {
 			go func(ii int) {
 				if resp, err := c.Post(HTTPHost+"/add", HeaderContentTypeValue, strings.NewReader("-1")); err != nil || resp == nil {
-					waitComplete <- Status{flag: false, url: "/minus", err: err}
+					waitComplete <- Status{flag: false, url: "/add", err: err}
 				} else {
 					waitComplete <- Status{flag: true}
 				}
@@ -241,28 +252,36 @@ func TestServerConcurrence(t *testing.T) {
 			t.Fatalf("wait reply timeout")
 		}
 	}
+	elapsed := time.Since(start)
+	fmt.Printf("Cost: %v ms\n", elapsed.Nanoseconds()/int64(time.Millisecond))
 
 	expectedValue := int64(incrNum - decrNum)
 	if value != expectedValue {
 		t.Fatalf("value=%v, expected=%v", value, expectedValue)
 	}
 	checkYourServer(t, c, "/value", MethodGet, []byte{}, StatusOK, []byte(strconv.FormatInt(value, 10)))
-	server.Shutdown()
+	server.Close()
+	if err := <-sCloseChan; err == nil {
+		fmt.Printf("Server closed\n")
+	} else {
+		t.Fatalf("%v", err)
+	}
 	fmt.Printf("  ... Passed\n")
 }
 
 // Test your client functions.
 // * Serial GET and POST requests and responses.
 func TestClientBasic(t *testing.T) {
-	server, serverMux := setupGoServer()
-	//	time.Sleep(time.Second * 100)
+	runtime.GOMAXPROCS(8)
+	server, serverMux, sCloseChan := setupGoServer()
 
-	c := NewClient()
 	var value int64
 
 	serverMux.HandleFunc("/add", wrapGoAddFunc(&value))
-
 	serverMux.HandleFunc("/value", wrapGoValueFunc(&value))
+
+	fmt.Printf("Test: Your basic client ...\n")
+	c := NewClient()
 
 	checkYourClient(t, c, "/add", MethodPost, []byte("10"), StatusOK, []byte(""))
 	if value != 10 {
@@ -276,6 +295,88 @@ func TestClientBasic(t *testing.T) {
 	}
 	checkYourClient(t, c, "/value", MethodGet, []byte{}, StatusOK, []byte(strconv.Itoa(int(value))))
 
-	server.Shutdown(context.Background())
+	server.Close()
+	if err := <-sCloseChan; err == nil {
+		fmt.Printf("Server closed\n")
+	} else {
+		t.Fatalf("%v", err)
+	}
+	fmt.Printf("  ... Passed\n")
+}
+
+// Test the concurrency and reuse features of your client.
+func TestClientConcurrence(t *testing.T) {
+	server, serverMux, sCloseChan := setupGoServer()
+
+	var value int64
+	serverMux.HandleFunc("/add", wrapGoAddFunc(&value))
+	serverMux.HandleFunc("/value", wrapGoValueFunc(&value))
+
+	c := NewClientSize(1)
+
+	fmt.Printf("Test: Concurrent perf of your client ...\n")
+	incrNum, decrNum := 2500, 2500
+	type Status struct {
+		flag bool
+		url  string
+		err  error
+	}
+
+	waitComplete := make(chan Status, incrNum+decrNum)
+	start := time.Now()
+	go func() {
+		for i := 0; i < incrNum; i++ {
+			go func(ii int) {
+				reqBodyData := []byte("1")
+
+				if resp, err := c.Post(HTTPHost+"/add", int64(len(reqBodyData)),
+					bytes.NewReader(reqBodyData)); err != nil || resp == nil {
+					waitComplete <- Status{flag: false, url: "/add", err: err}
+				} else {
+					waitComplete <- Status{flag: true}
+				}
+			}(i)
+		}
+	}()
+
+	go func() {
+		for i := 0; i < decrNum; i++ {
+			go func(ii int) {
+				reqBodyData := []byte("-1")
+				if resp, err := c.Post(HTTPHost+"/add", int64(len(reqBodyData)),
+					bytes.NewReader(reqBodyData)); err != nil || resp == nil {
+					waitComplete <- Status{flag: false, url: "/add", err: err}
+				} else {
+					waitComplete <- Status{flag: true}
+				}
+			}(i)
+		}
+	}()
+
+	for i := 0; i < cap(waitComplete); i++ {
+		select {
+		case status := <-waitComplete:
+			if !status.flag {
+				t.Fatalf("Get(%v) failed, error:%v", status.url, status.err)
+			}
+		case <-time.After(time.Millisecond * 500):
+			t.Fatalf("wait reply timeout")
+		}
+	}
+	elapsed := time.Since(start)
+	fmt.Printf("Cost: %v ms\n", elapsed.Nanoseconds()/int64(time.Millisecond))
+
+	expectedValue := int64(incrNum - decrNum)
+	if value != expectedValue {
+		t.Fatalf("value=%v, expected=%v", value, expectedValue)
+	}
+	checkYourClient(t, c, "/value", MethodGet, []byte{}, StatusOK, []byte(strconv.Itoa(int(value))))
+
+	server.Close()
+	if err := <-sCloseChan; err == nil {
+		fmt.Printf("Server closed\n")
+	} else {
+		t.Fatalf("%v", err)
+	}
 	fmt.Printf("  ... Passed\n")
 }

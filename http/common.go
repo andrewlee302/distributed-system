@@ -45,7 +45,7 @@ const (
 //           [ message-body ]
 // Status-Line = HTTP-Version SP Status-Code SP Reason-Phrase CRLF
 // Header = Key: Value CRLF
-
+//
 // Request for http request.
 type Request struct {
 	Method string
