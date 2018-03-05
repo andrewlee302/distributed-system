@@ -145,8 +145,6 @@ func (c *Client) Send(req *Request) (resp *Response, err error) {
 	return
 }
 
-var reuseCnt = int64(0)
-
 func (c *Client) putConn(tc *net.TCPConn, host string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -188,7 +186,6 @@ func (c *Client) getConn(host string) (tc *net.TCPConn, err error) {
 
 	} else {
 		// Reuse
-		// fmt.Println(atomic.AddInt64(&reuseCnt, 1))
 		if ele := tcpConns.Front(); ele != nil {
 			tc = ele.Value.(*net.TCPConn)
 			tcpConns.Remove(ele)
