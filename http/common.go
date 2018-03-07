@@ -2,6 +2,7 @@ package http
 
 import (
 	"io"
+	"net"
 	"net/url"
 )
 
@@ -78,10 +79,25 @@ type Response struct {
 	// attempt to reuse HTTP/1.0 or HTTP/1.1 TCP connections
 	// ("keep-alive") unless the Body is read to completion and is
 	// closed.
-	Body io.Reader
+	Body *ResponseReader
 
 	// Your data here.
 	writeBuff []byte
+}
+
+type ResponseReader struct {
+	c    *Client
+	tc   *net.TCPConn
+	host string
+	r    io.Reader
+}
+
+func (reader *ResponseReader) Read(p []byte) (n int, err error) {
+	return reader.r.Read(p)
+}
+
+func (reader *ResponseReader) Close() {
+	reader.c.putConn(reader.tc, reader.host)
 }
 
 // For HTTP/1.1 requests, handlers should read any

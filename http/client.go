@@ -130,18 +130,17 @@ func (c *Client) Send(req *Request) (resp *Response, err error) {
 		return nil, err
 	}
 
-	err = writeReq(tc, req)
+	err = c.writeReq(tc, req)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		c.cleanConn(tc, req)
 		return nil, err
 	}
-	resp, err = readResp(tc, req)
+	resp, err = c.readResp(tc, req)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		c.cleanConn(tc, req)
 	}
-	c.putConn(tc, req.URL.Host)
 	return
 }
 
@@ -211,7 +210,7 @@ func (c *Client) cleanConn(tc *net.TCPConn, req *Request) {
 // The number of transmit body must be the same as the specific
 // Content-Length. So the quantity of the available data in body is
 // at least Content-Length. If not, throws an error.
-func writeReq(tcpConn *net.TCPConn, req *Request) (err error) {
+func (c *Client) writeReq(tcpConn *net.TCPConn, req *Request) (err error) {
 	writer := bufio.NewWriterSize(tcpConn, ClientRequestBufSize)
 	reqLine := fmt.Sprintf("%s %s %s\n", req.Method, req.URL.Path, req.Proto)
 	_, err = writer.WriteString(reqLine)
@@ -248,7 +247,7 @@ func writeReq(tcpConn *net.TCPConn, req *Request) (err error) {
 // the current response.
 
 // err is not nil if tcp conn occurs, of course req is nil.
-func readResp(tcpConn *net.TCPConn, req *Request) (*Response, error) {
+func (c *Client) readResp(tcpConn *net.TCPConn, req *Request) (*Response, error) {
 
 	// Receive and prase repsonse message
 	resp := &Response{Header: make(map[string]string)}
@@ -294,9 +293,14 @@ LOOP:
 							resp.ContentLength = cLen
 
 							// Transfer the body to Response
-							resp.Body = &io.LimitedReader{
-								R: reader,
-								N: resp.ContentLength,
+							resp.Body = &ResponseReader{
+								c:    c,
+								tc:   tcpConn,
+								host: req.URL.Host,
+								r: &io.LimitedReader{
+									R: reader,
+									N: resp.ContentLength,
+								},
 							}
 							break LOOP
 						}

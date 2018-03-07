@@ -333,11 +333,11 @@ func TestClientConcurrence(t *testing.T) {
 		for i := 0; i < incrReqNum; i++ {
 			go func(ii int) {
 				reqBodyData := []byte("1")
-
 				if resp, err := c.Post(HTTPHost+"/add", int64(len(reqBodyData)),
 					bytes.NewReader(reqBodyData)); err != nil || resp == nil {
 					waitComplete <- Status{flag: false, url: "/add", err: err}
 				} else {
+					resp.Body.Close()
 					waitComplete <- Status{flag: true}
 				}
 			}(i)
@@ -352,6 +352,7 @@ func TestClientConcurrence(t *testing.T) {
 					bytes.NewReader(reqBodyData)); err != nil || resp == nil {
 					waitComplete <- Status{flag: false, url: "/add", err: err}
 				} else {
+					resp.Body.Close()
 					waitComplete <- Status{flag: true}
 				}
 			}(i)
