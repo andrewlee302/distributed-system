@@ -55,7 +55,7 @@ func (ppt *Participant) executeTxnPart(tp *TxnPart) {
 	if !ok {
 		panic("Invalid call: " + tp.CallName)
 	}
-	tp.callFlag, tp.rollbacker = caller.Call(tp.CallArgs, tp.InitRet)
+	tp.errCode, tp.rollbacker = caller.Call(tp.CallArgs, tp.InitRet)
 }
 
 // SubmitTxnPart submit the TxnPart to the participant and start it.
@@ -67,7 +67,7 @@ func (ppt *Participant) SubmitTxnPart(tp *TxnPart, reply *struct{}) error {
 	ppt.txnsMu.Unlock()
 	go func() {
 		ppt.executeTxnPart(tp)
-		if tp.callFlag != 0 {
+		if tp.errCode != 0 {
 			// Call failed.
 			ppt.aborted(tp)
 		} else {
@@ -86,7 +86,7 @@ func (ppt *Participant) SubmitTxnPart(tp *TxnPart, reply *struct{}) error {
 func (ppt *Participant) prepared(tp *TxnPart) {
 	atomic.StoreInt32(&tp.state, StateTxnPartPrepared)
 	// assert ppt.me == tp.Shard
-	args := PreparedArgs{TxnPartIdx: tp.Idx, TxnID: tp.TxnID, Flag: tp.callFlag}
+	args := PreparedArgs{TxnPartIdx: tp.Idx, TxnID: tp.TxnID, ErrCode: tp.errCode}
 	var reply PreparedReply
 	var ok = false
 	for !ok {
@@ -103,7 +103,7 @@ func (ppt *Participant) prepared(tp *TxnPart) {
 // considering transferring money between two accounts.
 func (ppt *Participant) aborted(tp *TxnPart) {
 	ppt.abort(tp)
-	args := AbortedArgs{TxnPartIdx: tp.Idx, TxnID: tp.TxnID, Flag: tp.callFlag}
+	args := AbortedArgs{TxnPartIdx: tp.Idx, TxnID: tp.TxnID, ErrCode: tp.errCode}
 	var reply AbortedReply
 	var ok = false
 	for !ok {

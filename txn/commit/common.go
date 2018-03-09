@@ -10,7 +10,7 @@ import (
 type PreparedArgs struct {
 	TxnID      string
 	TxnPartIdx int
-	Flag       int
+	ErrCode    int
 }
 
 type PreparedReply struct{}
@@ -18,7 +18,7 @@ type PreparedReply struct{}
 type AbortedArgs struct {
 	TxnID      string
 	TxnPartIdx int
-	Flag       int
+	ErrCode    int
 }
 
 type AbortedReply struct{}

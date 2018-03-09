@@ -109,10 +109,10 @@ func (ctr *Coordinator) StateTxn(txnID string) int32 {
 // StartTxn starts the transcation on all the particpants.
 func (ctr *Coordinator) StartTxn(txn *Txn, initArgs interface{}) {
 	// TODO
-	ret, flag := txn.initFunc(initArgs)
+	ret, errCode := txn.initFunc(initArgs)
 
 	// stop the txn
-	if flag == false {
+	if errCode != 0 {
 		atomic.StoreInt32(&txn.state, StateTxnAborted)
 		return
 	}
@@ -143,7 +143,7 @@ func (ctr *Coordinator) Abort(txnID string) {
 func (ctr *Coordinator) InformPrepared(args *PreparedArgs, reply *PreparedReply) error {
 	// TODO
 	txn := ctr.txnByID(args.TxnID)
-	txn.prepareTxnPart(args.TxnPartIdx, args.Flag)
+	txn.prepareTxnPart(args.TxnPartIdx, args.ErrCode)
 
 	// Only the 1st prepared will trigger the WaitAllPrepared().
 	swapped := atomic.CompareAndSwapInt32(&txn.state, StateTxnInit, StateTxnPreparing)
@@ -158,7 +158,7 @@ func (ctr *Coordinator) InformPrepared(args *PreparedArgs, reply *PreparedReply)
 func (ctr *Coordinator) InformAborted(args *AbortedArgs, reply *AbortedReply) error {
 	// TODO
 	txn := ctr.txnByID(args.TxnID)
-	txn.abortTxnPart(args.TxnPartIdx, args.Flag)
+	txn.abortTxnPart(args.TxnPartIdx, args.ErrCode)
 	return nil
 }
 

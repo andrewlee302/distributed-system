@@ -1,5 +1,7 @@
 package commit
 
+// Assume the coordinator hasn't any failures.
+//
 // Reference:
 // * Consensus on Transaction Commit
 
@@ -37,20 +39,20 @@ const (
 )
 
 // Caller is the execution logic.
-// Success when flag is 0, otherwise failed, which means
+// Success when errCode is 0, otherwise failed, which means
 // that the TxnPart aborts.
 // @args is the user args. It could be nil.
 // @initRet is the return value of initFunction of Txn. It could be nil.
-// @flag is the return value of TxnPart, must be more than 0.
+// @errCode is the error code of TxnPart, must be more than 0.
 // @rb is the rollback of the TxnPart.
 type Caller interface {
-	Call(args interface{}, initRet interface{}) (flag int, rb Rollbacker)
+	Call(args interface{}, initRet interface{}) (errCode int, rb Rollbacker)
 }
 
-type CallFunc func(args interface{}, initRet interface{}) (flag int, rb Rollbacker)
+type CallFunc func(args interface{}, initRet interface{}) (errCode int, rb Rollbacker)
 
-func (f CallFunc) Call(args interface{}, initRet interface{}) (flag int, rb Rollbacker) {
-	flag, rb = f(args, initRet)
+func (f CallFunc) Call(args interface{}, initRet interface{}) (errCode int, rb Rollbacker) {
+	errCode, rb = f(args, initRet)
 	return
 }
 
@@ -67,9 +69,9 @@ func (f RollbackFunc) Rollback() {
 }
 
 // TxnInitFunc is the initialization before Txn processing.
-// The returning flag indicates the state of the procedure,
+// The returning errCode indicates the state of the procedure,
 // which decides whether the following Txn processes or not.
-type TxnInitFunc func(args interface{}) (ret interface{}, flag bool)
+type TxnInitFunc func(args interface{}) (ret interface{}, errCode int)
 
 type KeyHashFunc func(key string) uint64
 
@@ -101,9 +103,10 @@ type Txn struct {
 //
 // It's mutually exclusive with commitTxn.
 func (txn *Txn) abortTxn() {
-	atomic.StoreInt32(&txn.state, StateTxnAborted)
 	// TODO
+	var wc sync.WaitGroup
 	for i := 0; i < len(txn.parts); i++ {
+		wc.Add(1)
 		txnPart := txn.parts[i]
 
 		// Abort all the parts of the txn.
@@ -116,8 +119,11 @@ func (txn *Txn) abortTxn() {
 			for !ok {
 				ok = call(txnPart.Remote, "Participant.Abort", args, &reply)
 			}
+			wc.Done()
 		}(txnPart)
 	}
+	wc.Wait()
+	atomic.StoreInt32(&txn.state, StateTxnAborted)
 }
 
 // Invoked in the following conditions:
@@ -126,12 +132,11 @@ func (txn *Txn) abortTxn() {
 // 3. Txn actively aborts.
 //
 // txnPartIdx < 0 in 2 and 3 conditions.
-func (txn *Txn) abortTxnPart(partIdx int, flag int) {
-
+func (txn *Txn) abortTxnPart(partIdx int, errCode int) {
 	// TODO
 	if partIdx >= 0 {
 		txnPart := txn.parts[partIdx]
-		txnPart.callFlag = flag
+		txnPart.errCode = errCode
 		atomic.StoreInt32(&txnPart.state, StateTxnPartAborted)
 	}
 
@@ -148,10 +153,10 @@ func (txn *Txn) abortTxnPart(partIdx int, flag int) {
 }
 
 // Invoked when one part of Txn informed StatePrepared.
-func (txn *Txn) prepareTxnPart(partIdx int, flag int) {
+func (txn *Txn) prepareTxnPart(partIdx int, errCode int) {
 
 	txnPart := txn.parts[partIdx]
-	txnPart.callFlag = flag
+	txnPart.errCode = errCode
 	swapped := atomic.CompareAndSwapInt32(&txnPart.state,
 		StateTxnPartWorking, StateTxnPartPrepared)
 
@@ -178,9 +183,10 @@ func (txn *Txn) prepareTxnPart(partIdx int, flag int) {
 //
 // It's mutually exclusive with abortTxn.
 func (txn *Txn) commitTxn() {
-	atomic.StoreInt32(&txn.state, StateTxnCommitted)
 	// TODO
+	var wc sync.WaitGroup
 	for i := 0; i < len(txn.parts); i++ {
+		wc.Add(1)
 		txnPart := txn.parts[i]
 		// Commit all the parts of the txn.
 		go func(txnPart *TxnPart) {
@@ -192,8 +198,10 @@ func (txn *Txn) commitTxn() {
 			for !ok {
 				ok = call(txnPart.Remote, "Participant.Commit", args, reply)
 			}
+			wc.Done()
 		}(txnPart)
 	}
+	atomic.StoreInt32(&txn.state, StateTxnCommitted)
 }
 
 // Wait for all participants to enter the prepared states.
@@ -258,7 +266,7 @@ type TxnPart struct {
 	InitRet  interface{} // returned by initFunction of Txn
 	// --------------
 
-	callFlag int
+	errCode int
 
 	// rollbacker is decided after caller is executed.
 	rollbacker Rollbacker
