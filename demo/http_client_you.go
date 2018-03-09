@@ -40,6 +40,7 @@ func main() {
 					bytes.NewReader(reqBodyData)); err != nil || resp == nil {
 					waitComplete <- Status{flag: false, url: "/add", err: err}
 				} else {
+					resp.Body.Close()
 					waitComplete <- Status{flag: true}
 				}
 			}(i)
@@ -54,6 +55,7 @@ func main() {
 					bytes.NewReader(reqBodyData)); err != nil || resp == nil {
 					waitComplete <- Status{flag: false, url: "/add", err: err}
 				} else {
+					resp.Body.Close()
 					waitComplete <- Status{flag: true}
 				}
 			}(i)

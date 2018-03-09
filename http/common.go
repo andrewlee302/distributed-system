@@ -28,26 +28,15 @@ const (
 	ServerResponseBufSize = 256
 	ClientResponseBufSize = 256
 	ClientRequestBufSize  = 256
-	WriteBuffInitSize     = 25
+	WriteBuffInitSize     = 256
 )
 
-//
-// -------- Request --------
 // Request = Request-Line
 //            *(( general-header | request-header | entity-header ) CRLF)
 //           CRLF
 //           [message-body]
 // Request-Line = Method SP Request-URI SP HTTP-Version CRLF
 // Header = Key: Value CRLF
-// -------- Response -------
-// Response = Status-Line
-//           *(( general-header | response-header | entity-header ) CRLF)
-//           CRLF
-//           [ message-body ]
-// Status-Line = HTTP-Version SP Status-Code SP Reason-Phrase CRLF
-// Header = Key: Value CRLF
-//
-// Request for http request.
 type Request struct {
 	Method string
 	URL    *url.URL
@@ -59,7 +48,14 @@ type Request struct {
 	Body          io.Reader
 }
 
-// Response for http Response.
+// Response = Status-Line
+//           *(( general-header | response-header | entity-header ) CRLF)
+//           CRLF
+//           [ message-body ]
+// Status-Line = HTTP-Version SP Status-Code SP Reason-Phrase CRLF
+// Header = Key: Value CRLF
+//
+// Request for http request.
 type Response struct {
 	Status     string
 	StatusCode int
@@ -69,22 +65,19 @@ type Response struct {
 	Header        map[string]string
 	ContentLength int64
 
-	// TODO refine
 	// Body represents the response body.
 	//
 	// The http Client and Transport guarantee that Body is always
 	// non-nil, even on responses without a body or responses with
 	// a zero-length body. It is the caller's responsibility to
-	// close Body. The default HTTP client's Transport does not
-	// attempt to reuse HTTP/1.0 or HTTP/1.1 TCP connections
-	// ("keep-alive") unless the Body is read to completion and is
-	// closed.
+	// close Body. It does not attempt to reuse TCP connections
+	// unless the Body is closed.
 	Body *ResponseReader
 
-	// Your data here.
 	writeBuff []byte
 }
 
+// ResponseReader is reader of the response body.
 type ResponseReader struct {
 	c    *Client
 	tc   *net.TCPConn
@@ -92,16 +85,21 @@ type ResponseReader struct {
 	r    io.Reader
 }
 
+// Read implements io.Reader interface.
 func (reader *ResponseReader) Read(p []byte) (n int, err error) {
 	return reader.r.Read(p)
 }
 
+// Close should be called to release the TCP connection.
+// It is the caller's responsibility to close Body. It
+// implements io.Closer interface.
 func (reader *ResponseReader) Close() {
+	// Put back the connection for the possible future use.
 	reader.c.putConn(reader.tc, reader.host)
 }
 
-// For HTTP/1.1 requests, handlers should read any
-// needed request body data before writing the response.
+// Write write data to the response body and update the
+// Content-Length header.
 func (resp *Response) Write(data []byte) {
 	if len(data) == 0 {
 		return
@@ -113,9 +111,8 @@ func (resp *Response) Write(data []byte) {
 	resp.writeBuff = append(resp.writeBuff, data...)
 }
 
-// WriteStatus sends status code.
+// WriteStatus set the status code of the response.
 func (resp *Response) WriteStatus(code int) {
-	// TODO
 	status, ok := statusText[code]
 	if !ok {
 		panic("Code doesn't exist in HTTP/1.1(RFC2616) protocol")

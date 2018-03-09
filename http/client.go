@@ -22,37 +22,44 @@ import (
 
 // Client send the http request and recevice response.
 //
-// Supports concurrency.
+// Supports concurrency on multiple TCP connections.
 type Client struct {
-	tcpConnPool map[string](*list.List) // host(hostname:port) -> TCPConns
 	connSize    int64
 	maxConnSize int64
+
+	// Your data here.
+
+	// host(hostname:port) -> TCPConns
+	tcpConnPool map[string](*list.List)
 	mu          sync.Mutex
 	cond        sync.Cond
 }
 
-// DefaultMaxConnSize is the default max size of tcp connection pool.
+// DefaultMaxConnSize is the default max size of
+// active tcp connections.
 const DefaultMaxConnSize = 500
 
-// NewClient initilize a Client with DefaultMaxPoolSize
+// NewClient initilize a Client with DefaultMaxConnSize.
 func NewClient() *Client {
-	c := &Client{tcpConnPool: make(map[string](*list.List)), maxConnSize: DefaultMaxConnSize}
-	c.cond = sync.Cond{L: &c.mu}
-	return c
+	return NewClientSize(DefaultMaxConnSize)
 }
 
-// NewClientSize initilize a Client with a specific maxPoolSize.
+// NewClientSize initilize a Client with a specific maxConnSize.
 func NewClientSize(maxConnSize int64) *Client {
-	c := &Client{tcpConnPool: make(map[string](*list.List)), maxConnSize: maxConnSize}
+	c := &Client{maxConnSize: maxConnSize}
+
+	// Your initialization code here.
+	c.tcpConnPool = make(map[string](*list.List))
 	c.cond = sync.Cond{L: &c.mu}
 	return c
 }
 
 // Get implements GET Method of HTTP/1.1.
 //
-// Must set the Content-Length, Host header.
+// Must set the body and following headers in the request:
+// * Content-Length
+// * Host
 func (c *Client) Get(URL string) (resp *Response, err error) {
-	// TODO
 	urlObj, err := url.ParseRequestURI(URL)
 	if err != nil {
 		return
@@ -74,13 +81,14 @@ func (c *Client) Get(URL string) (resp *Response, err error) {
 
 // Post implements POST Method of HTTP/1.1.
 //
-// Must set the Content-Length, Host header and body.
+// Must set the body and following headers in the request:
+// * Content-Length
+// * Host
 //
 // Write the contentLength bytes data into the body of HTTP request.
 // Discard the sequential data after the reading contentLength bytes
 // from body(io.Reader).
 func (c *Client) Post(URL string, contentLength int64, body io.Reader) (resp *Response, err error) {
-	// TODO
 	urlObj, err := url.ParseRequestURI(URL)
 	if err != nil {
 		return
@@ -109,34 +117,37 @@ const (
 
 // Send http request and returns an HTTP response.
 //
-// An error is returned if caused by client policy (such as invalid HTTP response),
-// or failure to speak HTTP (such as a network connectivity problem).
-// A non-2xx status code doesn't cause an error.
+// An error is returned if caused by client policy (such as invalid
+// HTTP response), or failure to speak HTTP (such as a network
+// connectivity problem).
+//
+// Note that a non-2xx status code doesn't mean any above errors.
 //
 // If the returned error is nil, the Response will contain a non-nil
-// Body which the user is expected to close. If the Body is not
-// closed, the Client's underlying Transport may not be able to re-use
-// a persistent TCP connection to the server for a subsequent "keep-alive" request.
+// Body which is the caller's responsibility to close. If the Body is
+// not closed, the Client may not be able to reuse a keep-alive TCP
+// connection to the same server.
 func (c *Client) Send(req *Request) (resp *Response, err error) {
-
-	// TODO
 	if req.URL == nil {
 		return nil, errors.New("http: nil Request.URL")
 	}
 
-	// Reuse logics
+	// Get a available connection to the host for HTTP communication.
 	tc, err := c.getConn(req.URL.Host)
 	if err != nil {
 		return nil, err
 	}
 
+	// Write the request to the TCP stream.
 	err = c.writeReq(tc, req)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		c.cleanConn(tc, req)
 		return nil, err
 	}
-	resp, err = c.readResp(tc, req)
+
+	// Construct the response from the TCP stream.
+	resp, err = c.constructResp(tc, req)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		c.cleanConn(tc, req)
@@ -144,12 +155,14 @@ func (c *Client) Send(req *Request) (resp *Response, err error) {
 	return
 }
 
+// Put back the available connection of the specific host
+// for the future use.
 func (c *Client) putConn(tc *net.TCPConn, host string) {
+	// TODO
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	tcpConns, ok := c.tcpConnPool[host]
 	if ok {
-		// fmt.Println("put back conn")
 		tcpConns.PushBack(tc)
 		c.cond.Broadcast()
 	} else {
@@ -157,7 +170,9 @@ func (c *Client) putConn(tc *net.TCPConn, host string) {
 	}
 }
 
+// Get a TCP connection to the host.
 func (c *Client) getConn(host string) (tc *net.TCPConn, err error) {
+	// TODO
 	c.mu.Lock()
 	tcpConns, ok := c.tcpConnPool[host]
 	if !ok {
@@ -198,19 +213,20 @@ func (c *Client) getConn(host string) (tc *net.TCPConn, err error) {
 	return tc, err
 }
 
-// close one connection.
+// Clean one connection in the case of errors.
 func (c *Client) cleanConn(tc *net.TCPConn, req *Request) {
+	// TODO
 	tc.Close()
 	atomic.AddInt64(&c.connSize, -1)
 	c.cond.Broadcast()
 }
 
-// Send the request to tcp stream.
+// Write the request to TCP stream.
 //
-// The number of transmit body must be the same as the specific
-// Content-Length. So the quantity of the available data in body is
-// at least Content-Length. If not, throws an error.
+// The number of bytes in transmit body of a request must be more
+// than the value of Content-Length header. If not, throws an error.
 func (c *Client) writeReq(tcpConn *net.TCPConn, req *Request) (err error) {
+	// TODO
 	writer := bufio.NewWriterSize(tcpConn, ClientRequestBufSize)
 	reqLine := fmt.Sprintf("%s %s %s\n", req.Method, req.URL.Path, req.Proto)
 	_, err = writer.WriteString(reqLine)
@@ -242,13 +258,14 @@ func (c *Client) writeReq(tcpConn *net.TCPConn, req *Request) (err error) {
 	return
 }
 
-// ResponseReader delimit the responses in tcp stream. Read will
-// return io.EOF if users digest data of contentLength bytes for
-// the current response.
-
-// err is not nil if tcp conn occurs, of course req is nil.
-func (c *Client) readResp(tcpConn *net.TCPConn, req *Request) (*Response, error) {
-
+// Construct response from the TCP stream.
+//
+// Body of the response will return io.EOF if reading
+// Content-Length bytes.
+//
+// If TCP errors occur, err is not nil and req is nil.
+func (c *Client) constructResp(tcpConn *net.TCPConn, req *Request) (*Response, error) {
+	// TODO
 	// Receive and prase repsonse message
 	resp := &Response{Header: make(map[string]string)}
 	reader := bufio.NewReaderSize(tcpConn, ClientResponseBufSize)

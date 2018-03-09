@@ -4,9 +4,9 @@ package http
 // Http server library.
 //
 // Support concurrent and keep-alive http requests.
-// NotFoundHandler
 // Not support: chuck transfer encoding.
 //
+// Note:
 // * Server use keep-alive http connections regardless of
 //   "Connection: keep-alive" header.
 // * Content-Length and Host headers are necessary in requests.
@@ -30,14 +30,14 @@ import (
 // Server here resembles ServeMux in golang standard lib.
 // Refer to https://golang.org/pkg/net/http/#ServeMux.
 type Server struct {
-	Addr *net.TCPAddr
+	Addr     *net.TCPAddr
+	l        *net.TCPListener
+	mu       sync.Mutex
+	doneChan chan struct{}
 
 	// Your data here.
 	handlers   map[string]Handler
-	l          *net.TCPListener
-	mu         sync.Mutex
 	activeConn map[*httpConn]struct{}
-	doneChan   chan struct{}
 }
 
 // NewServer initilizes the server of the speficif host.
@@ -45,37 +45,35 @@ type Server struct {
 func NewServer(host string) (s *Server) {
 	tcpAddr, err := net.ResolveTCPAddr("tcp", host)
 	if err != nil {
-
+		return nil
 	}
 	srv := &Server{Addr: tcpAddr}
+	srv.doneChan = make(chan struct{})
 
 	// Your initialization code here.
 	srv.handlers = make(map[string]Handler)
-	srv.doneChan = make(chan struct{})
 	srv.activeConn = make(map[*httpConn]struct{})
 	return srv
 }
 
-// A Handler responds to an HTTP request.
+// Handler process the HTTP request and get the response.
 //
-// Except for reading the body, handlers should not modify the
-// provided Request.
+// Handler should not modify the request.
 type Handler interface {
-	ServeHTTP(*Response, *Request)
+	ServeHTTP(resp *Response, req *Request)
 }
 
 // A HandlerFunc responds to an HTTP request.
 // Behave the same as he Handler.
-type HandlerFunc func(*Response, *Request)
+type HandlerFunc func(resp *Response, req *Request)
 
 // ServeHTTP calls f(w, r).
 func (f HandlerFunc) ServeHTTP(w *Response, r *Request) {
 	f(w, r)
 }
 
-// NotFoundHandler process the
+// NotFoundHandler gives 404 with the blank content.
 var NotFoundHandler HandlerFunc = func(resp *Response, req *Request) {
-	// TODO
 	resp.Write([]byte{})
 	resp.WriteStatus(StatusNotFound)
 }
@@ -101,10 +99,11 @@ func (srv *Server) AddHandler(pattern string, handler Handler) {
 
 }
 
-// Find a handler on a handler map given a path string.
-// Most-specific (longest) pattern wins.
-// If there doesn't exist handler, return the NotFoundHandler.
+// Find a handler matching the path using most-specific
+// (longest) matching. If no handler matches, return
+// the NotFoundHandler.
 func (srv *Server) match(path string) (h Handler) {
+	// TODO
 	matchLen := 0
 	for k, v := range srv.handlers {
 		if pathMatch(k, path) && len(k) > matchLen {
@@ -153,11 +152,13 @@ func (srv *Server) Close() (err error) {
 		close(srv.doneChan)
 	}
 	err = srv.l.Close()
+
+	// TODO
 	for c := range srv.activeConn {
 		c.tcpConn.Close()
 		delete(srv.activeConn, c)
 	}
-	return err
+	return
 }
 
 // ErrServerClosed is returned by the Server's Serve, ListenAndServe,
@@ -175,9 +176,12 @@ func (srv *Server) ListenAndServe() (err error) {
 	if err != nil {
 		return
 	}
+
+	srv.l = l
+
+	// TODO
 	// wait loop for accepting new connection (httpConn), then
 	// serve in the asynchronous style.
-	srv.l = l
 	for {
 		rw, err := l.Accept()
 		if err != nil {
@@ -200,15 +204,6 @@ func (srv *Server) newConn(conn *net.TCPConn) *httpConn {
 	return &httpConn{srv: srv, tcpConn: conn}
 }
 
-// A httpConn represents the server side of an HTTP connection.
-type httpConn struct {
-	// server is the server on which the connection arrived.
-	srv *Server
-
-	// conn is the underlying tcp network connection.
-	tcpConn *net.TCPConn
-}
-
 // Step flags for request strem processing.
 const (
 	RequestStepRequestLine = iota
@@ -216,25 +211,38 @@ const (
 	RequestStepBody
 )
 
+// A httpConn represents an HTTP connection in the server side.
+type httpConn struct {
+	srv     *Server
+	tcpConn *net.TCPConn
+}
+
 // Serve a new connection.
 func (hc *httpConn) serve() {
-	// TODO
-	// Receive and prase request message
+	// Server the http connection in loop way until something goes wrong.
+	// The http connection will be closed in the case of errors.
 	for {
-		req, err := hc.readReq()
+		// Construct the request from the TCP stream.
+		req, err := hc.constructReq()
 		if err != nil {
-
 			hc.close()
 			return
 		}
 		resp := &Response{Proto: HTTPVersion, Header: make(map[string]string)}
-		// fmt.Println(req)
+
+		// Find the matched handler.
 		handler := hc.srv.match(req.URL.Path)
+
+		// Handler it in user-defined logics or NotFoundHandler.
 		handler.ServeHTTP(resp, req)
+
+		// The response must contain HeaderContentLength in its Header.
+		resp.Header[HeaderContentLength] = strconv.FormatInt(resp.ContentLength, 10)
 
 		// *** Discard rest of request body.
 		io.Copy(ioutil.Discard, req.Body)
 
+		// Write the response to the TCP stream.
 		err = hc.writeResp(resp)
 		if err != nil {
 			hc.close()
@@ -243,23 +251,26 @@ func (hc *httpConn) serve() {
 	}
 }
 
+// Close the http connection.
 func (hc *httpConn) close() {
-	// fmt.Fprintln(os.Stderr, err)
+	// TODO
 	hc.srv.mu.Lock()
 	defer hc.srv.mu.Unlock()
 	hc.tcpConn.Close()
 	delete(hc.srv.activeConn, hc)
 }
 
-// err is not nil if tcp conn occurs.
-// Must write the HEADER_CONTENT_LENGTH header.
+// Write the response to the TCP stream.
+//
+// If TCP errors occur, err is not nil.
 func (hc *httpConn) writeResp(resp *Response) (err error) {
+	// TODO
 	writer := bufio.NewWriterSize(hc.tcpConn, ServerResponseBufSize)
 	_, err = writer.WriteString(fmt.Sprintf("%s %d %s\n", resp.Proto, resp.StatusCode, resp.Status))
 	if err != nil {
 		return
 	}
-	resp.Header[HeaderContentLength] = strconv.FormatInt(resp.ContentLength, 10)
+
 	for key, value := range resp.Header {
 		// fmt.Println("header:", fmt.Sprintf("%s: %s\n", key, value))
 		_, err = writer.WriteString(fmt.Sprintf("%s: %s\n", key, value))
@@ -283,9 +294,12 @@ func (hc *httpConn) writeResp(resp *Response) (err error) {
 	return
 }
 
-// err is not nil if tcp conn occurs, of course req is nil.
+// Construct the request from the TCP stream.
+//
+// If TCP errors occur, err is not nil and req is nil.
 // Request header must contain the Content-Length.
-func (hc *httpConn) readReq() (*Request, error) {
+func (hc *httpConn) constructReq() (*Request, error) {
+	// TODO
 	req := &Request{Header: make(map[string]string)}
 	reader := bufio.NewReaderSize(hc.tcpConn, ServerRequestBufSize)
 	var wholeLine []byte
