@@ -142,7 +142,7 @@ func (c *Client) Send(req *Request) (resp *Response, err error) {
 	err = c.writeReq(tc, req)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		c.cleanConn(tc, req)
+		c.cleanConn(tc)
 		return nil, err
 	}
 
@@ -150,7 +150,7 @@ func (c *Client) Send(req *Request) (resp *Response, err error) {
 	resp, err = c.constructResp(tc, req)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		c.cleanConn(tc, req)
+		c.cleanConn(tc)
 	}
 	return
 }
