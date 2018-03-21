@@ -1,4 +1,4 @@
-package commit
+package twopc
 
 // Assume the coordinator hasn't any failures.
 //
@@ -32,10 +32,10 @@ const (
 	StateTxnPartAborted
 )
 
-// TxnPart reply
+// Special Txn errCode
 const (
-	ErrTimeout   = -1
-	ErrUserAbort = -2
+	ErrTxnTimeout   = -1
+	ErrTxnUserAbort = -2
 )
 
 // Caller is the execution logic.
@@ -46,13 +46,13 @@ const (
 // @errCode is the error code of TxnPart, must be more than 0.
 // @rb is the rollback of the TxnPart.
 type Caller interface {
-	Call(args interface{}, initRet interface{}) (errCode int, rb Rollbacker)
+	Call(initRet interface{}) (errCode int, rb Rollbacker)
 }
 
-type CallFunc func(args interface{}, initRet interface{}) (errCode int, rb Rollbacker)
+type CallFunc func(initRet interface{}) (errCode int, rb Rollbacker)
 
-func (f CallFunc) Call(args interface{}, initRet interface{}) (errCode int, rb Rollbacker) {
-	errCode, rb = f(args, initRet)
+func (f CallFunc) Call(initRet interface{}) (errCode int, rb Rollbacker) {
+	errCode, rb = f(initRet)
 	return
 }
 
@@ -71,9 +71,24 @@ func (f RollbackFunc) Rollback() {
 // TxnInitFunc is the initialization before Txn processing.
 // The returning errCode indicates the state of the procedure,
 // which decides whether the following Txn processes or not.
+// If it's 0, then do the next. Otherwise, stop the txn.
 type TxnInitFunc func(args interface{}) (ret interface{}, errCode int)
 
+var BlankTxnInitFunc TxnInitFunc = func(args interface{}) (ret interface{}, errCode int) {
+	ret = nil
+	errCode = 0
+	return
+}
+
 type KeyHashFunc func(key string) uint64
+
+var DefaultKeyHashFunc KeyHashFunc = func(key string) uint64 {
+	var hash uint64 = 0
+	for i := 0; i < len(key); i++ {
+		hash = 31*hash + uint64(key[i])
+	}
+	return hash & (1<<63 - 1)
+}
 
 type Txn struct {
 	ID string
@@ -87,13 +102,13 @@ type Txn struct {
 	state int32
 	mu    sync.Mutex // control txnState
 
-	timeout int64 // Millisecond
+	timeoutMs int64 // Millisecond
 
 	initFunc    TxnInitFunc
 	keyHashFunc KeyHashFunc
 
 	// indicate the code when state is aborted
-	errorCode int
+	errCode int
 }
 
 // Abort transaction, i.e. all the particpants of
@@ -117,7 +132,7 @@ func (txn *Txn) abortTxn() {
 			var reply AbortReply
 			var ok = false
 			for !ok {
-				ok = call(txnPart.Remote, "Participant.Abort", args, &reply)
+				ok = call(txn.ctr.network, txnPart.Remote, "Participant.Abort", args, &reply)
 			}
 			wc.Done()
 		}(txnPart)
@@ -138,6 +153,9 @@ func (txn *Txn) abortTxnPart(partIdx int, errCode int) {
 		txnPart := txn.parts[partIdx]
 		txnPart.errCode = errCode
 		atomic.StoreInt32(&txnPart.state, StateTxnPartAborted)
+		// !!! OR operator
+		txn.errCode = txn.errCode | txnPart.errCode
+		fmt.Println("abortTxnPart", txn.errCode)
 	}
 
 	// Make sure abortTxn will be triggered only once.
@@ -146,7 +164,6 @@ func (txn *Txn) abortTxnPart(partIdx int, errCode int) {
 	state := atomic.LoadInt32(&txn.state)
 	if state != StateTxnAborted {
 		// assert txnState != StateCommitted
-
 		txn.done <- struct{}{}
 		go txn.abortTxn()
 	}
@@ -196,11 +213,12 @@ func (txn *Txn) commitTxn() {
 			var reply CommitReply
 			var ok = false
 			for !ok {
-				ok = call(txnPart.Remote, "Participant.Commit", args, reply)
+				ok = call(txn.ctr.network, txnPart.Remote, "Participant.Commit", args, &reply)
 			}
 			wc.Done()
 		}(txnPart)
 	}
+	wc.Wait()
 	atomic.StoreInt32(&txn.state, StateTxnCommitted)
 }
 
@@ -215,11 +233,11 @@ func (txn *Txn) commitTxn() {
 func (txn *Txn) waitAllPartsPrepared() {
 	// TODO
 	select {
-	case <-time.Tick(time.Millisecond * time.Duration(txn.timeout)):
+	case <-time.Tick(time.Millisecond * time.Duration(txn.timeoutMs)):
 		{
-			fmt.Println("Abort because of timeout")
-			txn.errorCode = ErrTimeout
+			fmt.Println("Abort because of timeout", time.Millisecond*time.Duration(txn.timeoutMs))
 			txn.abortTxnPart(-1, 0)
+			txn.errCode = ErrTxnTimeout
 		}
 	case <-txn.done:
 		{
@@ -235,17 +253,27 @@ func nrand() string {
 	return strconv.FormatInt(x, 10)
 }
 
-func (txn *Txn) SetTxnPart(key, callName string, callArgs interface{}) {
-	shard := int(txn.keyHashFunc(key)) % len(txn.ctr.ppts)
+func (txn *Txn) addTxnPart(shard int, callName string) {
 	txn.parts = append(txn.parts, nil)
 	id := nrand()
 	part := &TxnPart{ID: id, TxnID: txn.ID, Idx: int(txn.partsNum),
-		Key: key, Shard: shard, Remote: txn.ctr.ppts[shard],
-		CallName: callName, CallArgs: callArgs, InitRet: nil,
+		Shard: shard, Remote: txn.ctr.ppts[shard],
+		CallName: callName, InitRet: nil,
 		txn: txn, state: StateTxnCreated, undoDone: false, canAbort: false,
 	}
 	txn.parts[part.Idx] = part
 	atomic.AddInt32(&txn.partsNum, 1)
+}
+
+func (txn *Txn) AddTxnPart(key, callName string) {
+	shard := int(txn.keyHashFunc(key)) % len(txn.ctr.ppts)
+	txn.addTxnPart(shard, callName)
+}
+
+func (txn *Txn) BroadcastTxnPart(callName string) {
+	for i := 0; i < len(txn.ctr.ppts); i++ {
+		txn.addTxnPart(i, callName)
+	}
 }
 
 type TxnPart struct {
@@ -253,7 +281,6 @@ type TxnPart struct {
 	TxnID string // ID of the corresponding Txn
 	Idx   int    // Index of TxnPart among the parts of Txn
 
-	Key   string
 	Shard int // Index of shards
 	// Remote address(host:port) of the corresponding participant
 	// of the its shard.
@@ -262,7 +289,6 @@ type TxnPart struct {
 	// --------------
 	// Transaction parameters.
 	CallName string
-	CallArgs interface{}
 	InitRet  interface{} // returned by initFunction of Txn
 	// --------------
 

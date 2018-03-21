@@ -1,4 +1,4 @@
-package commit
+package twopc
 
 import (
 	"fmt"
@@ -61,12 +61,12 @@ type CommitReply struct {
 // please use call() to send all RPCs, in client.go and server.go.
 // please do not change this function.
 //
-func call(srv string, name string, args interface{}, reply interface{}) bool {
-	c, err := rpc.Dial("unix", srv)
+func call(network, srv string, name string, args interface{}, reply interface{}) bool {
+	c, err := rpc.Dial(network, srv)
 	if err != nil {
 		err1 := err.(*net.OpError)
 		if err1.Err != syscall.ENOENT && err1.Err != syscall.ECONNREFUSED {
-			fmt.Printf("paxos Dial() failed: %v\n", err1)
+			fmt.Printf("twopc Dial() failed: %v\n", err1)
 		}
 		return false
 	}
@@ -76,5 +76,6 @@ func call(srv string, name string, args interface{}, reply interface{}) bool {
 	if err == nil {
 		return true
 	}
+	fmt.Println(err)
 	return false
 }

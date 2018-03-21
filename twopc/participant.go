@@ -1,4 +1,4 @@
-package commit
+package twopc
 
 //
 // Participant is the role of two-phase commit protocol.
@@ -27,15 +27,17 @@ import (
 
 // Participant is the executed role of two-phase commit.
 type Participant struct {
-	mu         sync.Mutex
-	l          net.Listener
+	mu   sync.Mutex
+	l    net.Listener
+	rpcs *rpc.Server
+
 	dead       int32 // for testing
 	unreliable int32 // for testing
 	rpcCount   int32 // for testing
 
+	network   string // "unix" or "tcp"
 	coord     string // coordinator address
-	me        int
-	peers     []string
+	addr      string // ppt service address
 	txnsMu    sync.Mutex
 	txnsParts map[string]*TxnPart
 	// sbPrepared bool // some particpant has prepared
@@ -55,12 +57,13 @@ func (ppt *Participant) executeTxnPart(tp *TxnPart) {
 	if !ok {
 		panic("Invalid call: " + tp.CallName)
 	}
-	tp.errCode, tp.rollbacker = caller.Call(tp.CallArgs, tp.InitRet)
+	tp.errCode, tp.rollbacker = caller.Call(tp.InitRet)
 }
 
 // SubmitTxnPart submit the TxnPart to the participant and start it.
 // @reply could be nil.
 func (ppt *Participant) SubmitTxnPart(tp *TxnPart, reply *struct{}) error {
+	// fmt.Println("SubmitTxnPart", *tp)
 	tp.state = StateTxnPartWorking
 	ppt.txnsMu.Lock()
 	ppt.txnsParts[tp.ID] = tp
@@ -90,7 +93,7 @@ func (ppt *Participant) prepared(tp *TxnPart) {
 	var reply PreparedReply
 	var ok = false
 	for !ok {
-		ok = call(ppt.coord, "Coordinator.InformPrepared", args, &reply)
+		ok = call(ppt.network, ppt.coord, "Coordinator.InformPrepared", args, &reply)
 	}
 }
 
@@ -107,7 +110,7 @@ func (ppt *Participant) aborted(tp *TxnPart) {
 	var reply AbortedReply
 	var ok = false
 	for !ok {
-		ok = call(ppt.coord, "Coordinator.InformAborted", args, &reply)
+		ok = call(ppt.network, ppt.coord, "Coordinator.InformAborted", args, &reply)
 	}
 }
 
@@ -143,21 +146,25 @@ func (ppt *Participant) abort(tp *TxnPart) {
 	atomic.StoreInt32(&tp.state, StateTxnPartAborted)
 	if tp.canAbort == false {
 		tp.canAbort = true
+		if tp.rollbacker == nil {
+			panic("No rollbacker for " + tp.CallName)
+		}
 		tp.rollbacker.Rollback()
 	}
 }
 
 // NewParticipant init a participant service.
-func NewParticipant(peers []string, me int, coord string) *Participant {
-	ppt := &Participant{peers: peers, me: me, coord: coord,
+func NewParticipant(network, addr, coord string) *Participant {
+	ppt := &Participant{network: network, addr: addr, coord: coord,
 		txnsParts: make(map[string]*TxnPart), callerMap: make(map[string]Caller)}
-	l, e := net.Listen("unix", peers[me])
+	l, e := net.Listen(network, addr)
 	if e != nil {
 		log.Fatal("listen error: ", e)
 	}
 	ppt.l = l
 	rpcs := rpc.NewServer()
 	rpcs.Register(ppt)
+	ppt.rpcs = rpcs
 
 	// Don't change any of the following code,
 	// or do anything to subvert it.
@@ -188,11 +195,16 @@ func NewParticipant(peers []string, me int, coord string) *Participant {
 				conn.Close()
 			}
 			if err != nil && ppt.isdead() == false {
-				fmt.Printf("Participant(%v) accept: %v\n", me, err.Error())
+				fmt.Printf("Participant(%v) accept: %v\n", ppt.addr, err.Error())
 			}
 		}
 	}()
 	return ppt
+}
+
+// RegisterRPCService registers the service onto the rpc calls.
+func (ppt *Participant) RegisterRPCService(service interface{}) {
+	ppt.rpcs.Register(service)
 }
 
 // Kill tell the peer to shut itself down.

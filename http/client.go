@@ -214,7 +214,7 @@ func (c *Client) getConn(host string) (tc *net.TCPConn, err error) {
 }
 
 // Clean one connection in the case of errors.
-func (c *Client) cleanConn(tc *net.TCPConn, req *Request) {
+func (c *Client) cleanConn(tc *net.TCPConn) {
 	// TODO
 	tc.Close()
 	atomic.AddInt64(&c.connSize, -1)

@@ -1,4 +1,4 @@
-package commit
+package twopc
 
 //
 // Coordinator is the role of two-phase commit protocol.
@@ -28,7 +28,6 @@ package commit
 //
 // API
 // StateTxn
-// StartTxn
 // Abort
 
 import (
@@ -42,32 +41,36 @@ import (
 
 // Coordinator is the manager role of two-phase commit.
 type Coordinator struct {
-	mu sync.Mutex
-	l  net.Listener
+	mu   sync.Mutex
+	l    net.Listener
+	rpcs *rpc.Server
 
 	coord string   // coordinator address
 	ppts  []string // participants addresses
 
-	txnsMu sync.RWMutex
-	txns   map[string]*Txn
+	network string
+	txnsMu  sync.RWMutex
+	txns    map[string]*Txn
 }
 
 // NewCoordinator init a Coordinator service.
-func NewCoordinator(ppts []string, coord string) *Coordinator {
-	ctr := &Coordinator{ppts: ppts, coord: coord,
+func NewCoordinator(network, coord string, ppts []string) *Coordinator {
+	ctr := &Coordinator{network: network, coord: coord, ppts: ppts,
 		txns: make(map[string]*Txn)}
 
 	// Don't change any of the following code,
 	// or do anything to subvert it.
 
 	// Create a thread to accept RPC connections
-	l, e := net.Listen("unix", coord)
+	l, e := net.Listen(network, coord)
 	if e != nil {
 		log.Fatal("listen error: ", e)
 	}
 	ctr.l = l
 	rpcs := rpc.NewServer()
 	rpcs.Register(ctr)
+	ctr.rpcs = rpcs
+
 	// Don't change any of the following code,
 	// or do anything to subvert it.
 
@@ -78,20 +81,25 @@ func NewCoordinator(ppts []string, coord string) *Coordinator {
 			if err == nil {
 				go rpcs.ServeConn(conn)
 			} else {
-				fmt.Printf("Coordinator(%v) accept: %v\n", coord, err.Error())
+				fmt.Printf("Coordinator accept: %v\n", err.Error())
 			}
 		}
 	}()
 	return ctr
 }
 
+// RegisterService registers the service onto the rpc calls.
+func (ctr *Coordinator) RegisterService(service interface{}) {
+	ctr.rpcs.Register(service)
+}
+
 func (ctr *Coordinator) NewTxn(initFunc TxnInitFunc,
-	keyHashFunc KeyHashFunc, timeout int64) *Txn {
+	keyHashFunc KeyHashFunc, timeoutMs int64) *Txn {
 	// TODO
 	txn := &Txn{ID: nrand(), ctr: ctr,
 		partsNum: 0, parts: nil, preparedCnt: 0,
 		done: make(chan struct{}, 1), state: StateTxnCreated,
-		timeout: timeout, initFunc: initFunc,
+		timeoutMs: timeoutMs, initFunc: initFunc,
 		keyHashFunc: keyHashFunc,
 	}
 	ctr.txnsMu.Lock()
@@ -100,14 +108,20 @@ func (ctr *Coordinator) NewTxn(initFunc TxnInitFunc,
 	return txn
 }
 
+type TxnState struct {
+	State   int32
+	ErrCode int
+}
+
 // StateTxn return the latest state of the transcation.
-func (ctr *Coordinator) StateTxn(txnID string) int32 {
-	txn := ctr.txnByID(txnID)
-	return atomic.LoadInt32(&txn.state)
+func (ctr *Coordinator) StateTxn(txnID *string, reply *TxnState) error {
+	txn := ctr.txnByID(*txnID)
+	reply.State, reply.ErrCode = atomic.LoadInt32(&txn.state), txn.errCode
+	return nil
 }
 
 // StartTxn starts the transcation on all the particpants.
-func (ctr *Coordinator) StartTxn(txn *Txn, initArgs interface{}) {
+func (txn *Txn) Start(initArgs interface{}) {
 	// TODO
 	ret, errCode := txn.initFunc(initArgs)
 
@@ -123,18 +137,19 @@ func (ctr *Coordinator) StartTxn(txn *Txn, initArgs interface{}) {
 			if ret != nil {
 				txnPart.InitRet = ret
 			}
-			call(txnPart.Remote, "Participant.SubmitTxnPart", txnPart, nil)
+			// fmt.Println("here", *txnPart)
+			call(txn.ctr.network, txnPart.Remote, "Participant.SubmitTxnPart", txnPart, &struct{}{})
 		}(txnPart)
 	}
 }
 
-// Abort triggers when users want to actively abort the
-// transaction in some conditions.
-func (ctr *Coordinator) Abort(txnID string) {
-	txn := ctr.txnByID(txnID)
-	txn.errorCode = ErrUserAbort
-	txn.abortTxnPart(-1, 0)
-}
+// // Abort triggers when users want to actively abort the
+// // transaction in some conditions.
+// func (ctr *Coordinator) Abort(txnID string) {
+// 	txn := ctr.txnByID(txnID)
+// 	txn.errorCode = ErrTxnUserAbort
+// 	txn.abortTxnPart(-1, 0)
+// }
 
 // ------------ RPC calls START -------------
 
