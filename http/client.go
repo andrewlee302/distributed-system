@@ -184,31 +184,30 @@ func (c *Client) getConn(host string) (tc *net.TCPConn, err error) {
 		c.cond.Wait()
 	}
 
-	if tcpConns.Front() == nil {
+	ele := tcpConns.Front()
+
+	if ele == nil {
 		// *** The following code should be here instead of the end of the block.
 		atomic.AddInt64(&c.connSize, 1)
 		c.mu.Unlock()
+
 		// New tcp connection
 		tcpAddr, err := net.ResolveTCPAddr("tcp", host)
 		if err != nil {
+			atomic.AddInt64(&c.connSize, -1)
 			return nil, err
 		}
 		tc, err = net.DialTCP("tcp", nil, tcpAddr)
 		if err != nil {
+			atomic.AddInt64(&c.connSize, -1)
 			return nil, err
 		}
 
 	} else {
 		// Reuse
-		if ele := tcpConns.Front(); ele != nil {
-			tc = ele.Value.(*net.TCPConn)
-			tcpConns.Remove(ele)
-			c.cond.Broadcast()
-			c.mu.Unlock()
-		} else {
-			panic("not here")
-		}
-
+		tc = ele.Value.(*net.TCPConn)
+		tcpConns.Remove(ele)
+		c.mu.Unlock()
 	}
 	return tc, err
 }
