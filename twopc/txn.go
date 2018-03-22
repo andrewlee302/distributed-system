@@ -7,6 +7,7 @@ package twopc
 
 import (
 	"crypto/rand"
+	"distributed-system/util"
 	"fmt"
 	"math/big"
 	"strconv"
@@ -132,7 +133,7 @@ func (txn *Txn) abortTxn() {
 			var reply AbortReply
 			var ok = false
 			for !ok {
-				ok = call(txn.ctr.network, txnPart.Remote, "Participant.Abort", args, &reply)
+				ok = util.RPCPoolArrayCall(txn.ctr.pa, txnPart.Shard, "Participant.Abort", args, &reply)
 			}
 			wc.Done()
 		}(txnPart)
@@ -213,7 +214,7 @@ func (txn *Txn) commitTxn() {
 			var reply CommitReply
 			var ok = false
 			for !ok {
-				ok = call(txn.ctr.network, txnPart.Remote, "Participant.Commit", args, &reply)
+				ok = util.RPCPoolArrayCall(txn.ctr.pa, txnPart.Shard, "Participant.Commit", args, &reply)
 			}
 			wc.Done()
 		}(txnPart)

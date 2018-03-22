@@ -31,6 +31,7 @@ package twopc
 // Abort
 
 import (
+	"distributed-system/util"
 	"fmt"
 	"log"
 	"net"
@@ -44,6 +45,7 @@ type Coordinator struct {
 	mu   sync.Mutex
 	l    net.Listener
 	rpcs *rpc.Server
+	pa   *util.ResourcePoolsArray
 
 	coord string   // coordinator address
 	ppts  []string // participants addresses
@@ -53,10 +55,21 @@ type Coordinator struct {
 	txns    map[string]*Txn
 }
 
+const CoordClientMaxSizeForOnePpt = 10
+
 // NewCoordinator init a Coordinator service.
 func NewCoordinator(network, coord string, ppts []string) *Coordinator {
 	ctr := &Coordinator{network: network, coord: coord, ppts: ppts,
 		txns: make(map[string]*Txn)}
+	news := make([]func() util.Resource, len(ppts))
+	for i := 0; i < len(ppts); i++ {
+		addr := ppts[i]
+		news[i] = func() util.Resource {
+			return util.DialServer(network, addr)
+		}
+	}
+	ctr.pa = util.NewResourcePoolsArray(news,
+		CoordClientMaxSizeForOnePpt, len(ppts))
 
 	// Don't change any of the following code,
 	// or do anything to subvert it.
@@ -93,6 +106,7 @@ func (ctr *Coordinator) RegisterService(service interface{}) {
 	ctr.rpcs.Register(service)
 }
 
+// NewTxn initialize a new Txn. It's thread-safe.
 func (ctr *Coordinator) NewTxn(initFunc TxnInitFunc,
 	keyHashFunc KeyHashFunc, timeoutMs int64) *Txn {
 	// TODO
@@ -138,7 +152,8 @@ func (txn *Txn) Start(initArgs interface{}) {
 				txnPart.InitRet = ret
 			}
 			// fmt.Println("here", *txnPart)
-			call(txn.ctr.network, txnPart.Remote, "Participant.SubmitTxnPart", txnPart, &struct{}{})
+			util.RPCPoolArrayCall(txn.ctr.pa, txnPart.Shard, "Participant.SubmitTxnPart", txnPart, &struct{}{})
+
 		}(txnPart)
 	}
 }

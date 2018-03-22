@@ -15,6 +15,7 @@ package twopc
 // if receving all StateCommitted.
 
 import (
+	"distributed-system/util"
 	"fmt"
 	"log"
 	"math/rand"
@@ -30,6 +31,7 @@ type Participant struct {
 	mu   sync.Mutex
 	l    net.Listener
 	rpcs *rpc.Server
+	pool *util.ResourcePool
 
 	dead       int32 // for testing
 	unreliable int32 // for testing
@@ -93,7 +95,9 @@ func (ppt *Participant) prepared(tp *TxnPart) {
 	var reply PreparedReply
 	var ok = false
 	for !ok {
-		ok = call(ppt.network, ppt.coord, "Coordinator.InformPrepared", args, &reply)
+		c := ppt.pool.Get().(*rpc.Client)
+		ok = util.RPCPoolCall(ppt.pool, "Coordinator.InformPrepared", args, &reply)
+		ppt.pool.Put(c)
 	}
 }
 
@@ -110,7 +114,7 @@ func (ppt *Participant) aborted(tp *TxnPart) {
 	var reply AbortedReply
 	var ok = false
 	for !ok {
-		ok = call(ppt.network, ppt.coord, "Coordinator.InformAborted", args, &reply)
+		ok = util.RPCPoolCall(ppt.pool, "Coordinator.InformAborted", args, &reply)
 	}
 }
 
@@ -153,10 +157,16 @@ func (ppt *Participant) abort(tp *TxnPart) {
 	}
 }
 
+const DefaultPptPoolSize = 5
+
 // NewParticipant init a participant service.
 func NewParticipant(network, addr, coord string) *Participant {
 	ppt := &Participant{network: network, addr: addr, coord: coord,
 		txnsParts: make(map[string]*TxnPart), callerMap: make(map[string]Caller)}
+	ppt.pool = util.NewResourcePool(func() util.Resource {
+		return util.DialServer(network, coord)
+	}, DefaultPptPoolSize)
+
 	l, e := net.Listen(network, addr)
 	if e != nil {
 		log.Fatal("listen error: ", e)
