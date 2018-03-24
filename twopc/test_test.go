@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strconv"
 	"testing"
+	"time"
 )
 
 func port(tag string, host int) string {
@@ -83,6 +84,7 @@ func TestBasicSuccess(t *testing.T) {
 	for txnState.State != StateTxnCommitted {
 		coord.StateTxn(&txn.ID, &txnState)
 	}
+	time.Sleep(time.Second)
 	checkDB(t, dbs[keyHashFunc("1")%nppt], 1, 2)
 	checkDB(t, dbs[keyHashFunc("2")%nppt], 2, 3)
 	checkErrCode(t, txnState.ErrCode, 0)
@@ -128,6 +130,7 @@ func TestBasicSFailure(t *testing.T) {
 	for txnState.State != StateTxnAborted {
 		coord.StateTxn(&txn.ID, &txnState)
 	}
+	time.Sleep(time.Second)
 	checkDB(t, dbs[keyHashFunc("1")%nppt], 1, 0)
 	checkDB(t, dbs[keyHashFunc("2")%nppt], 2, 0)
 	checkErrCode(t, txnState.ErrCode, 1)

@@ -20,6 +20,7 @@ type ResourcePool struct {
 }
 
 func NewResourcePool(new func() Resource, maxSize int) *ResourcePool {
+
 	pool := ResourcePool{New: new, entities: list.New(),
 		maxSize: int64(maxSize), activeSize: 0}
 	pool.cond = sync.Cond{L: &pool.mu}

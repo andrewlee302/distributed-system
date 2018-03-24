@@ -20,7 +20,14 @@ func DialServer(network, addr string) *rpc.Client {
 	return rpcClient
 }
 
+// debug
+var RPCCallNs int64 = 0
+
 func RPCPoolCall(pool *ResourcePool, name string, args interface{}, reply interface{}) bool {
+	// now := time.Now()
+	// defer func() {
+	// 	atomic.AddInt64(&RPCCallNs, time.Since(now).Nanoseconds())
+	// }()
 	c := pool.Get().(*rpc.Client)
 	err := c.Call(name, args, reply)
 	if err == nil {
@@ -34,6 +41,10 @@ func RPCPoolCall(pool *ResourcePool, name string, args interface{}, reply interf
 }
 
 func RPCPoolArrayCall(pa *ResourcePoolsArray, i int, name string, args interface{}, reply interface{}) bool {
+	// now := time.Now()
+	// defer func() {
+	// 	atomic.AddInt64(&RPCCallNs, time.Since(now).Nanoseconds())
+	// }()
 	c := pa.Get(i).(*rpc.Client)
 	err := c.Call(name, args, reply)
 	if err == nil {
@@ -47,6 +58,10 @@ func RPCPoolArrayCall(pa *ResourcePoolsArray, i int, name string, args interface
 }
 
 func RPCCall(c *rpc.Client, name string, args interface{}, reply interface{}) bool {
+	// now := time.Now()
+	// defer func() {
+	// 	atomic.AddInt64(&RPCCallNs, time.Since(now).Nanoseconds())
+	// }()
 	err := c.Call(name, args, reply)
 	if err == nil {
 		return true

@@ -28,7 +28,6 @@ import (
 
 // Participant is the executed role of two-phase commit.
 type Participant struct {
-	mu   sync.Mutex
 	l    net.Listener
 	rpcs *rpc.Server
 	pool *util.ResourcePool
@@ -53,13 +52,18 @@ func (ppt *Participant) RegisterCaller(caller Caller, name string) {
 	ppt.callerMap[name] = caller
 }
 
+// !!! NOTE
+// executeTxnPart should be mutual exclusive with abort.
 func (ppt *Participant) executeTxnPart(tp *TxnPart) {
-	// callerName string, args interface{}, reply *int
+	ppt.txnsMu.Lock()
+	defer ppt.txnsMu.Unlock()
 	caller, ok := ppt.callerMap[tp.CallName]
+
 	if !ok {
 		panic("Invalid call: " + tp.CallName)
 	}
 	tp.errCode, tp.rollbacker = caller.Call(tp.InitRet)
+	// fmt.Println("TxnPartID:"+tp.ID+tp.CallName, tp.rollbacker)
 }
 
 // SubmitTxnPart submit the TxnPart to the participant and start it.
@@ -119,19 +123,19 @@ func (ppt *Participant) aborted(tp *TxnPart) {
 }
 
 // Abort is invoked by coordinator.
+// The following method be called not only once.
 func (ppt *Participant) Abort(args *AbortArgs, reply *AbortReply) error {
 	tp := ppt.endTxnPart(args.TxnPartID)
-	// Abort method could be called not only once.
 	if tp != nil {
-		ppt.abort(tp)
+		go ppt.abort(tp)
 	}
 	return nil
 }
 
 // Commit is invoked by coordinator.
+// The following method could be called not only once.
 func (ppt *Participant) Commit(args *CommitArgs, reply *CommitReply) error {
 	tp := ppt.endTxnPart(args.TxnPartID)
-	// Commit method could be called not only once.
 	if tp != nil {
 		atomic.StoreInt32(&tp.state, StateTxnPartCommitted)
 	}
@@ -146,15 +150,18 @@ func (ppt *Participant) endTxnPart(txnPartID string) *TxnPart {
 	return tp
 }
 
+// executeTxnPart should be mutual exclusive with abort.
 func (ppt *Participant) abort(tp *TxnPart) {
+	ppt.txnsMu.Lock()
+	defer ppt.txnsMu.Unlock()
 	atomic.StoreInt32(&tp.state, StateTxnPartAborted)
 	if tp.canAbort == false {
 		tp.canAbort = true
-		if tp.rollbacker == nil {
-			panic("No rollbacker for " + tp.CallName)
+		if tp.rollbacker != nil {
+			tp.rollbacker.Rollback()
 		}
-		tp.rollbacker.Rollback()
 	}
+
 }
 
 const DefaultPptPoolSize = 5

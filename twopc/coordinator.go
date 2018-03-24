@@ -34,10 +34,12 @@ import (
 	"distributed-system/util"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"net/rpc"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // Coordinator is the manager role of two-phase commit.
@@ -55,7 +57,7 @@ type Coordinator struct {
 	txns    map[string]*Txn
 }
 
-const CoordClientMaxSizeForOnePpt = 10
+const CoordClientMaxSizeForOnePpt = 100
 
 // NewCoordinator init a Coordinator service.
 func NewCoordinator(network, coord string, ppts []string) *Coordinator {
@@ -134,6 +136,21 @@ func (ctr *Coordinator) StateTxn(txnID *string, reply *TxnState) error {
 	return nil
 }
 
+// StateTxn return the latest state of the transcation.
+func (ctr *Coordinator) SyncTxnEnd(txnID *string, reply *TxnState) error {
+	txn := ctr.txnByID(*txnID)
+	reply.State, reply.ErrCode = atomic.LoadInt32(&txn.state), txn.errCode
+	retryCnt := 0
+	for reply.State != StateTxnAborted && reply.State != StateTxnCommitted {
+		retryCnt++
+		waitTime := int64(math.Pow(2, float64(retryCnt)))
+		waitTime = 0
+		time.Sleep(time.Millisecond * time.Duration(waitTime))
+		reply.State, reply.ErrCode = atomic.LoadInt32(&txn.state), txn.errCode
+	}
+	return nil
+}
+
 // StartTxn starts the transcation on all the particpants.
 func (txn *Txn) Start(initArgs interface{}) {
 	// TODO
@@ -141,6 +158,7 @@ func (txn *Txn) Start(initArgs interface{}) {
 
 	// stop the txn
 	if errCode != 0 {
+		txn.errCode = errCode
 		atomic.StoreInt32(&txn.state, StateTxnAborted)
 		return
 	}
@@ -153,7 +171,6 @@ func (txn *Txn) Start(initArgs interface{}) {
 			}
 			// fmt.Println("here", *txnPart)
 			util.RPCPoolArrayCall(txn.ctr.pa, txnPart.Shard, "Participant.SubmitTxnPart", txnPart, &struct{}{})
-
 		}(txnPart)
 	}
 }
