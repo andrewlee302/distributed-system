@@ -144,7 +144,6 @@ func (ctr *Coordinator) SyncTxnEnd(txnID *string, reply *TxnState) error {
 	for reply.State != StateTxnAborted && reply.State != StateTxnCommitted {
 		retryCnt++
 		waitTime := int64(math.Pow(2, float64(retryCnt)))
-		waitTime = 0
 		time.Sleep(time.Millisecond * time.Duration(waitTime))
 		reply.State, reply.ErrCode = atomic.LoadInt32(&txn.state), txn.errCode
 	}
