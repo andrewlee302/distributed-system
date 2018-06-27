@@ -1,19 +1,5 @@
 package twopc
 
-//
-// Participant is the role of two-phase commit protocol.
-//
-// Transcation state (state). Initial state is StateWorking.
-// StateWorking could be transferred to StatePrepared when
-// Prepared() is invoked and
-// StateAborted.
-// StateWorking could be transferred to StateAborted
-// if 1st received state is StateAborted.
-// StatePrepared could be transferred to StateAborted
-// if receving any StateAborted.
-// StatePrepared could be transferred to StateCommitted
-// if receving all StateCommitted.
-
 import (
 	"distributed-system/util"
 	"fmt"
@@ -25,6 +11,8 @@ import (
 	"sync/atomic"
 	"syscall"
 )
+
+// BUG():.
 
 // Participant is the executed role of two-phase commit.
 type Participant struct {
@@ -46,8 +34,8 @@ type Participant struct {
 	callerMap map[string]Caller
 }
 
-// RegisterCaller register a caller with a unique name,
-// which can be used to index the caller.
+// RegisterCaller registers a caller with a unique name, which can be used to
+// identify the caller in Txn.AddTxnPart and Txn.BroadcastTxnPart.
 func (ppt *Participant) RegisterCaller(caller Caller, name string) {
 	ppt.callerMap[name] = caller
 }
@@ -66,8 +54,11 @@ func (ppt *Participant) executeTxnPart(tp *TxnPart) {
 	// fmt.Println("TxnPartID:"+tp.ID+tp.CallName, tp.rollbacker)
 }
 
-// SubmitTxnPart submit the TxnPart to the participant and start it.
-// @reply could be nil.
+// SubmitTxnPart is a RPC call, which submits the TxnPart to the participant
+// and executes it. It is returned immediately without waiting for the
+// execution of the TxnPart.
+//
+// The reply could be nil.
 func (ppt *Participant) SubmitTxnPart(tp *TxnPart, reply *struct{}) error {
 	// fmt.Println("SubmitTxnPart", *tp)
 	tp.state = StateTxnPartWorking
@@ -122,8 +113,10 @@ func (ppt *Participant) aborted(tp *TxnPart) {
 	}
 }
 
-// Abort is invoked by coordinator.
-// The following method be called not only once.
+// Abort is a RPC call invoked by Coordinator when the coordinator decides
+// the transaction should be aborted, including timeout event or receiving
+// the Aborted msg from one or more Participants. It could be called not only
+// once.
 func (ppt *Participant) Abort(args *AbortArgs, reply *AbortReply) error {
 	tp := ppt.endTxnPart(args.TxnPartID)
 	if tp != nil {
@@ -132,8 +125,9 @@ func (ppt *Participant) Abort(args *AbortArgs, reply *AbortReply) error {
 	return nil
 }
 
-// Commit is invoked by coordinator.
-// The following method could be called not only once.
+// Commit is a RPC call invoked by Coordinator when the coordinator make sure
+// all the participants have entered the Prepared state. It could be called
+// not only once.
 func (ppt *Participant) Commit(args *CommitArgs, reply *CommitReply) error {
 	tp := ppt.endTxnPart(args.TxnPartID)
 	if tp != nil {
@@ -164,9 +158,13 @@ func (ppt *Participant) abort(tp *TxnPart) {
 
 }
 
+// DefaultPptPoolSize is the maximum number of connections in the pool from the
+// Participant to the Coordinator.
 const DefaultPptPoolSize = 5
 
-// NewParticipant init a participant service.
+// NewParticipant init a participant service. Network could be "tcp" or "unix".
+// Coord is the listened address on the Coordiantor. Addr is the listened
+// address of this Participant.
 func NewParticipant(network, addr, coord string) *Participant {
 	ppt := &Participant{network: network, addr: addr, coord: coord,
 		txnsParts: make(map[string]*TxnPart), callerMap: make(map[string]Caller)}
@@ -176,8 +174,10 @@ func NewParticipant(network, addr, coord string) *Participant {
 
 	l, e := net.Listen(network, addr)
 	if e != nil {
-		log.Fatal("listen error: ", e)
+		log.Printf("listen error: %v\n", e)
+		return nil
 	}
+	log.Printf("listen successfully @%v\n", addr)
 	ppt.l = l
 	rpcs := rpc.NewServer()
 	rpcs.Register(ppt)

@@ -1,10 +1,5 @@
 package twopc
 
-// Assume the coordinator hasn't any failures.
-//
-// Reference:
-// * Consensus on Transaction Commit
-
 import (
 	"crypto/rand"
 	"distributed-system/util"
@@ -16,73 +11,106 @@ import (
 	"time"
 )
 
-// Status of Txn
+// BUG():.
+
+// States of Txn.
 const (
+	// Created state in NewTxn.
 	StateTxnCreated = iota
+	// Initial function is executed successfully.
 	StateTxnInit
+	// The first msg from Participant for a Txn is Prepared msg.
 	StateTxnPreparing
+	// All TxnParts have been informed of the Prepared msgs.
 	StateTxnCommitted
+	// Received one or more Aborted msgs, or timeout after receiving the
+	// first Prepared msg.
 	StateTxnAborted
 )
 
-// Status of TxnPart
+// States of TxnPart.
 const (
+	// Participant received the TxnPart before executing it.
 	StateTxnPartWorking = iota
+	// TxnPart is executed successfully.
 	StateTxnPartPrepared
-	StateTxnPartCommitted
+	// TxnPart is executed with an error.
 	StateTxnPartAborted
+	// TxnPart is informed that all TxnPart have been gotten Prepared states.
+	StateTxnPartCommitted
 )
 
-// Special Txn errCode
+// Special error codes for Txn. They are less than 0.
+// 0 means success.
+// User-defined error code must be more than 0.
 const (
 	ErrTxnTimeout   = -1
 	ErrTxnUserAbort = -2
 )
 
-// Caller is the execution logic.
-// Success when errCode is 0, otherwise failed, which means
-// that the TxnPart aborts.
-// @args is the user args. It could be nil.
-// @initRet is the return value of initFunction of Txn. It could be nil.
-// @errCode is the error code of TxnPart, must be more than 0.
-// @rb is the rollback of the TxnPart.
+// Caller represents one part of transaction logic executed by the specific
+// Participant. It's implemented by the library user and registered in the
+// Participant by RegisterCaller function.
+//
+// ErrCode decide whether the Participant sends back the StatePrepared or
+// StateAborted msg. It must be more than 0. Rb is the rollbacker, which is
+// execuetd while errCode is not 0, i.e. the txn should be aborted and the
+// txnPart should rollback the state.
+//
+// InitRet is the return value of initial function of the txn. It is filled
+// in the Coordinator before the txnPart is submitted to the Participant. It
+// could be nil.
 type Caller interface {
 	Call(initRet interface{}) (errCode int, rb Rollbacker)
 }
 
+// CallFunc is a Caller. User could use the function directly as a Caller.
 type CallFunc func(initRet interface{}) (errCode int, rb Rollbacker)
 
+// Call makes CallFunc implement the Caller interface.
 func (f CallFunc) Call(initRet interface{}) (errCode int, rb Rollbacker) {
 	errCode, rb = f(initRet)
 	return
 }
 
-type RollbackFunc func()
-
-var BlankRollbackFunc RollbackFunc = func() {}
-
+// Rollbacker represents rollback logic of the txnPart on the specific
+// Participant. It related to the specific Caller. If the errCode of Caller
+// is not 0, then the rollbacker will be executed to redo the state changes.
+// It's implemented by the library user and returned in the Caller's
+// implementation.
 type Rollbacker interface {
 	Rollback()
 }
 
+// RollbackFunc is a Rollbacker. User could use the function directly as a
+// Rollbacker.
+type RollbackFunc func()
+
+// Rollback makes RollbackFunc implement the Rollbacker interface.
 func (f RollbackFunc) Rollback() {
 	f()
 }
 
-// TxnInitFunc is the initialization before Txn processing.
-// The returning errCode indicates the state of the procedure,
-// which decides whether the following Txn processes or not.
-// If it's 0, then do the next. Otherwise, stop the txn.
+// BlankRollbackFunc is the Rollbacker with blank logic.
+var BlankRollbackFunc RollbackFunc = func() {}
+
+// TxnInitFunc is the initialization before Txn processing. The returning
+// errCode indicates the state of the procedure, which decides whether the
+// following Txn processes or not. If it's 0, then do the next. Otherwise,
+// stop the txn.
 type TxnInitFunc func(args interface{}) (ret interface{}, errCode int)
 
+// BlankTxnInitFunc is the blank TxnInitFunc without any logics and return 0.
 var BlankTxnInitFunc TxnInitFunc = func(args interface{}) (ret interface{}, errCode int) {
 	ret = nil
 	errCode = 0
 	return
 }
 
+// KeyHashFunc is the hash func for distributing the TxnParts.
 type KeyHashFunc func(key string) uint64
 
+// DefaultKeyHashFunc is the default KeyHashFunc.
 var DefaultKeyHashFunc KeyHashFunc = func(key string) uint64 {
 	var hash uint64 = 0
 	for i := 0; i < len(key); i++ {
@@ -91,6 +119,8 @@ var DefaultKeyHashFunc KeyHashFunc = func(key string) uint64 {
 	return hash & (1<<63 - 1)
 }
 
+// Txn is the structure for a transaction, which is created by Coordinator
+// and be controlled by binding functions.
 type Txn struct {
 	ID string
 
@@ -112,10 +142,9 @@ type Txn struct {
 	errCode int
 }
 
-// Abort transaction, i.e. all the particpants of
-// the transaction will abort. It must be invoked at most
-// once. The txn state has been set to StateAborted before
-// this function.
+// Abort transaction, i.e. all the particpants of the transaction will abort.
+// It must be invoked at most once. The txn state has been set to
+// StateAborted before this function.
 //
 // It's mutually exclusive with commitTxn.
 func (txn *Txn) abortTxn() {
@@ -156,7 +185,7 @@ func (txn *Txn) abortTxnPart(partIdx int, errCode int) {
 		atomic.StoreInt32(&txnPart.state, StateTxnPartAborted)
 		// !!! OR operator
 		txn.errCode = txn.errCode | txnPart.errCode
-		fmt.Println("abortTxnPart", txn.errCode)
+		// fmt.Println("abortTxnPart", txn.errCode)
 	}
 
 	// Make sure abortTxn will be triggered only once.
@@ -194,10 +223,9 @@ func (txn *Txn) prepareTxnPart(partIdx int, errCode int) {
 	}
 }
 
-// Commit the transcation, i.e. all the particpants
-// of the transaction will commit. It must be invoked at most
-// once. The txn state has been set to StateCommited before
-// this function.
+// commitTxn commits the transcation, i.e. all the particpants of the
+// transaction will commit. It must be invoked at most once. The txn state
+// has been set to StateCommited before this function.
 //
 // It's mutually exclusive with abortTxn.
 func (txn *Txn) commitTxn() {
@@ -223,14 +251,13 @@ func (txn *Txn) commitTxn() {
 	atomic.StoreInt32(&txn.state, StateTxnCommitted)
 }
 
-// Wait for all participants to enter the prepared states.
-// If it receives all the prepared states before the
-// timeout, commitTxn() may be invoked. Otherwise abortTxn()
-// may be be invoked.
+// waitAllPartsPrepared waits for all participants to enter the prepared
+// states. If it receives all the prepared states before the timeout,
+// commitTxn() may be invoked. Otherwise abortTxn() may be be invoked.
 //
-// Notice: We use "may", because the conditions of
-// CommitTxn or AbortTxn coule be satisfied when the
-// paticpants call Prepared or Aborted asynchronously.
+// Notice: We use "may", because the conditions of CommitTxn or AbortTxn
+// coule be satisfied when the paticpants call Prepared or Aborted
+// asynchronously.
 func (txn *Txn) waitAllPartsPrepared() {
 	// TODO
 	select {
@@ -266,32 +293,80 @@ func (txn *Txn) addTxnPart(shard int, callName string) {
 	atomic.AddInt32(&txn.partsNum, 1)
 }
 
+// AddTxnPart adds TxnPart into the Txn. Key decides which specific
+// Participant will execute the TxnPart. CallName is the function name
+// binding to the Particpant.
 func (txn *Txn) AddTxnPart(key, callName string) {
 	shard := int(txn.keyHashFunc(key)) % len(txn.ctr.ppts)
 	txn.addTxnPart(shard, callName)
 }
 
+// BroadcastTxnPart adds TxnPart into the Txn. The TxnPart will be executed
+// on all Participants instead of the specific Participant. CallName is the
+// function name binding to the Particpant.
+//
+// It is usually be used when we don't know which Partipant should execute
+// the TxnPart logic.
 func (txn *Txn) BroadcastTxnPart(callName string) {
 	for i := 0; i < len(txn.ctr.ppts); i++ {
 		txn.addTxnPart(i, callName)
 	}
 }
 
-type TxnPart struct {
-	ID    string // ID of TxnPart
-	TxnID string // ID of the corresponding Txn
-	Idx   int    // Index of TxnPart among the parts of Txn
+// Start to execute the transcation. Firstly initilize the Txn by initArgs.
+// If the return code is 0, the TxnParts will be submitted into the
+// corresponding shards on specific Participators. Otherwise, abort the
+// Txn immediately.
+func (txn *Txn) Start(initArgs interface{}) {
+	// TODO
+	ret, errCode := txn.initFunc(initArgs)
 
-	Shard int // Index of shards
+	// stop the txn
+	if errCode != 0 {
+		txn.errCode = errCode
+		atomic.StoreInt32(&txn.state, StateTxnAborted)
+		return
+	}
+	atomic.StoreInt32(&txn.state, StateTxnInit)
+
+	for _, txnPart := range txn.parts {
+		go func(txnPart *TxnPart) {
+			if ret != nil {
+				txnPart.InitRet = ret
+			}
+			// fmt.Println("here", *txnPart)
+			util.RPCPoolArrayCall(txn.ctr.pa, txnPart.Shard, "Participant.SubmitTxnPart", txnPart, &struct{}{})
+		}(txnPart)
+	}
+}
+
+// TxnPart is one part of the transaction. One transcation is made up for
+// several TxnParts, function named by CallName will be executed on the specific
+// participant and errCode returned will affect whether the participant sends
+// back StatePrepared or StateAborted msg. The rollbacker will be executed if
+// the corresponding txn aborted.
+type TxnPart struct {
+	// ID of TxnPart.
+	ID string
+
+	// ID of the corresponding Txn.
+	TxnID string
+
+	// Idx is the index of TxnPart among the parts of Txn.
+	Idx int
+
+	// Shard is th index of shards
+	Shard int
+
 	// Remote address(host:port) of the corresponding participant
 	// of the its shard.
 	Remote string
 
-	// --------------
-	// Transaction parameters.
+	// CallName is the binding name of the function.
 	CallName string
-	InitRet  interface{} // returned by initFunction of Txn
-	// --------------
+
+	// InitRet is the return value of initFunction of Txn.
+	InitRet interface{}
 
 	errCode int
 
