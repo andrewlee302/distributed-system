@@ -1,18 +1,32 @@
+/*
+Package http provides server and client interfaces in http protocol.
+
+The reliable transmission protocol could be TCP and unix domain socket, both of
+which support transmission of a reliable stream of bytes.
+
+For TCP transmission, IP and port could be extracted from the URL.
+To extend unix domain socket as the stream channel, we provide a transformation
+from URL to unix domain socket file description.
+
+Default unix domain directory is /var/tmp/. The unix file for a host is located
+in the unix domain directory. For example.
+ http://localhost:8080/add --> socket:/var/tmp/localhost:8080 path:/add
+
+Features
+
+The library supports concurrent and keep-alive http requests. But it doesn't
+support chuck transfer encoding for large data transferring.
+
+ * Server always uses keep-alive http connections regardless of "Connection:
+ keep-alive" header.
+ * Content-Length and Host headers are necessary in requests.
+ * Content-Length header is necessary in responses.
+ * Header value is single.
+ * Request-URI must be absolute path. Like: "/add", "/incr".
+*/
 package http
 
-//
 // Http server library.
-//
-// Support concurrent and keep-alive http requests.
-// Not support: chuck transfer encoding.
-//
-// Note:
-// * Server use keep-alive http connections regardless of
-//   "Connection: keep-alive" header.
-// * Content-Length and Host headers are necessary in requests.
-// * Content-Length header is necessary in responses.
-// * Header value is single.
-// * Request-URI must be absolute path. Like: "/add", "/incr".
 
 import (
 	"bufio"
@@ -22,6 +36,7 @@ import (
 	"io/ioutil"
 	"net"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,8 +45,9 @@ import (
 // Server here resembles ServeMux in golang standard lib.
 // Refer to https://golang.org/pkg/net/http/#ServeMux.
 type Server struct {
-	Addr     *net.TCPAddr
-	l        *net.TCPListener
+	Addr     string
+	Network  string
+	l        net.Listener
 	mu       sync.Mutex
 	doneChan chan struct{}
 
@@ -42,12 +58,21 @@ type Server struct {
 
 // NewServer initilizes the server of the speficif host.
 // The host param includes the hostname and port.
-func NewServer(host string) (s *Server) {
-	tcpAddr, err := net.ResolveTCPAddr("tcp", host)
+func NewServer(network string, host string) (s *Server) {
+	var addr string
+	var err error
+	if network == "tcp" {
+		addr = host
+	} else if network == "unix" {
+		addr = UnixSocketFile(host)
+		defer os.Mkdir(unixDir, 0777)
+	} else {
+		return nil
+	}
 	if err != nil {
 		return nil
 	}
-	srv := &Server{Addr: tcpAddr}
+	srv := &Server{Addr: addr, Network: network}
 	srv.doneChan = make(chan struct{})
 
 	// Your initialization code here.
@@ -56,14 +81,14 @@ func NewServer(host string) (s *Server) {
 	return srv
 }
 
-// Handler process the HTTP request and get the response.
+// Handler processes the HTTP request and get the response.
 //
 // Handler should not modify the request.
 type Handler interface {
 	ServeHTTP(resp *Response, req *Request)
 }
 
-// A HandlerFunc responds to an HTTP request.
+// HandlerFunc responds to an HTTP request.
 // Behave the same as he Handler.
 type HandlerFunc func(resp *Response, req *Request)
 
@@ -78,12 +103,12 @@ var NotFoundHandler HandlerFunc = func(resp *Response, req *Request) {
 	resp.WriteStatus(StatusNotFound)
 }
 
-// AddHandlerFunc add handlerFunc to the list of handlers.
+// AddHandlerFunc adds handlerFunc to the list of handlers.
 func (srv *Server) AddHandlerFunc(pattern string, handlerFunc HandlerFunc) {
 	srv.AddHandler(pattern, handlerFunc)
 }
 
-// AddHandler add handler to the list of handlers.
+// AddHandler adds handler to the list of handlers.
 //
 // "" pattern or nil handler is forbidden.
 func (srv *Server) AddHandler(pattern string, handler Handler) {
@@ -155,8 +180,7 @@ func (srv *Server) Close() (err error) {
 
 	// TODO
 	for c := range srv.activeConn {
-		c.tcpConn.Close()
-		delete(srv.activeConn, c)
+		c.closeLocked()
 	}
 	return
 }
@@ -165,25 +189,29 @@ func (srv *Server) Close() (err error) {
 // and ListenAndServeTLS methods after a call to Shutdown or Close.
 var ErrServerClosed = errors.New("http: Server closed")
 
-// ListenAndServe start listening and serve http connections.
+// ListenAndServe starts listening and serve http connections.
 // The method is blocking, which doesn't return until other
 // goroutines close the server.
 func (srv *Server) ListenAndServe() (err error) {
 	// TODO
 	// listen on the specific tcp addr, then call Serve()
-	l, err := net.ListenTCP("tcp", srv.Addr)
-	defer l.Close()
+	var l net.Listener
+	if srv.Network == "tcp" {
+		l, err = net.Listen("tcp", srv.Addr)
+	} else {
+		l, err = net.Listen("unix", srv.Addr)
+	}
 	if err != nil {
 		return
 	}
-
+	defer l.Close()
 	srv.l = l
 
 	// TODO
 	// wait loop for accepting new connection (httpConn), then
 	// serve in the asynchronous style.
 	for {
-		rw, err := l.Accept()
+		conn, err := l.Accept()
 		if err != nil {
 			select {
 			case <-srv.doneChan:
@@ -192,7 +220,7 @@ func (srv *Server) ListenAndServe() (err error) {
 			}
 			return err
 		}
-		c := srv.newConn(rw.(*net.TCPConn))
+		c := srv.newConn(srv.Network, conn)
 		srv.mu.Lock()
 		srv.activeConn[c] = struct{}{}
 		srv.mu.Unlock()
@@ -200,8 +228,12 @@ func (srv *Server) ListenAndServe() (err error) {
 	}
 }
 
-func (srv *Server) newConn(conn *net.TCPConn) *httpConn {
-	return &httpConn{srv: srv, tcpConn: conn}
+func (srv *Server) newConn(network string, conn net.Conn) *httpConn {
+	if network == "tcp" {
+		return &httpConn{srv: srv, rw: conn.(*net.TCPConn)}
+	} else {
+		return &httpConn{srv: srv, rw: conn.(*net.UnixConn)}
+	}
 }
 
 // Step flags for request strem processing.
@@ -213,8 +245,8 @@ const (
 
 // A httpConn represents an HTTP connection in the server side.
 type httpConn struct {
-	srv     *Server
-	tcpConn *net.TCPConn
+	srv *Server
+	rw  io.ReadWriter
 }
 
 // Serve a new connection.
@@ -251,13 +283,21 @@ func (hc *httpConn) serve() {
 	}
 }
 
+func (hc *httpConn) closeLocked() {
+	if hc.srv.Network == "tcp" {
+		hc.rw.(*net.TCPConn).Close()
+	} else {
+		hc.rw.(*net.UnixConn).Close()
+	}
+	delete(hc.srv.activeConn, hc)
+}
+
 // Close the http connection.
 func (hc *httpConn) close() {
 	// TODO
 	hc.srv.mu.Lock()
 	defer hc.srv.mu.Unlock()
-	hc.tcpConn.Close()
-	delete(hc.srv.activeConn, hc)
+	hc.closeLocked()
 }
 
 // Write the response to the TCP stream.
@@ -265,7 +305,7 @@ func (hc *httpConn) close() {
 // If TCP errors occur, err is not nil.
 func (hc *httpConn) writeResp(resp *Response) (err error) {
 	// TODO
-	writer := bufio.NewWriterSize(hc.tcpConn, ServerResponseBufSize)
+	writer := bufio.NewWriterSize(hc.rw, ServerResponseBufSize)
 	_, err = writer.WriteString(fmt.Sprintf("%s %d %s\n", resp.Proto, resp.StatusCode, resp.Status))
 	if err != nil {
 		return
@@ -301,7 +341,7 @@ func (hc *httpConn) writeResp(resp *Response) (err error) {
 func (hc *httpConn) constructReq() (*Request, error) {
 	// TODO
 	req := &Request{Header: make(map[string]string)}
-	reader := bufio.NewReaderSize(hc.tcpConn, ServerRequestBufSize)
+	reader := bufio.NewReaderSize(hc.rw, ServerRequestBufSize)
 	var wholeLine []byte
 	var lastWait = false
 	var step = RequestStepRequestLine

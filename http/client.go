@@ -1,13 +1,10 @@
 package http
 
-//
 // Http client library.
-// Support concurrent and keep-alive http requests.
-// Not support: chuck transfer encoding.
 
 import (
 	"bufio"
-	"container/list"
+	"distributed-system/util"
 	"errors"
 	"fmt"
 	"io"
@@ -17,39 +14,59 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 )
 
-// Client send the http request and recevice response.
-//
-// Supports concurrency on multiple TCP connections.
+// Client sends the http request and recevice response. Supports concurrency
+// on multiple connections.
 type Client struct {
-	connSize    int64
-	maxConnSize int64
-
 	// Your data here.
 
-	// host(hostname:port) -> TCPConns
-	tcpConnPool map[string](*list.List)
-	mu          sync.Mutex
-	cond        sync.Cond
+	// tcp or unix
+	Network string
+	// map: server host -> connection pool
+	connPools *util.ResourcePoolsMap
+	mu        sync.Mutex
+	cond      sync.Cond
 }
 
-// DefaultMaxConnSize is the default max size of
-// active tcp connections.
-const DefaultMaxConnSize = 500
+// DefaultMaxConnSizeForOne is the default max size of active connections for one
+// host.
+const DefaultMaxConnSizeForOne = 500
 
-// NewClient initilize a Client with DefaultMaxConnSize.
-func NewClient() *Client {
-	return NewClientSize(DefaultMaxConnSize)
+// NewClient initilize a Client with DefaultMaxConnSizeForOne.
+func NewClient(network string) *Client {
+	return NewClientSize(network, DefaultMaxConnSizeForOne)
 }
 
 // NewClientSize initilize a Client with a specific maxConnSize.
-func NewClientSize(maxConnSize int64) *Client {
-	c := &Client{maxConnSize: maxConnSize}
+func NewClientSize(network string, maxConnSizeForOne int) *Client {
+	if network != "unix" && network != "tcp" {
+		return nil
+	}
+	c := &Client{Network: network}
 
 	// Your initialization code here.
-	c.tcpConnPool = make(map[string](*list.List))
+	c.connPools = util.NewResourcePoolsMap(
+		func(host string) func() util.Resource {
+			return func() util.Resource {
+				if network == "tcp" {
+					conn, err := net.Dial("tcp", host)
+					if err != nil {
+						return nil
+					}
+					return conn
+				}
+				// network == "unix"
+				socketFile := UnixSocketFile(host)
+				conn, err := net.Dial("unix", socketFile)
+				if err != nil {
+					return nil
+				}
+				return conn
+			}
+
+		},
+		maxConnSizeForOne)
 	c.cond = sync.Cond{L: &c.mu}
 	return c
 }
@@ -125,7 +142,7 @@ const (
 //
 // If the returned error is nil, the Response will contain a non-nil
 // Body which is the caller's responsibility to close. If the Body is
-// not closed, the Client may not be able to reuse a keep-alive TCP
+// not closed, the Client may not be able to reuse a keep-alive
 // connection to the same server.
 func (c *Client) Send(req *Request) (resp *Response, err error) {
 	if req.URL == nil {
@@ -133,100 +150,33 @@ func (c *Client) Send(req *Request) (resp *Response, err error) {
 	}
 
 	// Get a available connection to the host for HTTP communication.
-	tc, err := c.getConn(req.URL.Host)
+	conn := c.connPools.Get(req.URL.Host).(io.ReadWriteCloser)
+
+	// Write the request to the connection stream.
+	err = c.writeReq(conn, req)
 	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		c.connPools.Clean(req.URL.Host, conn)
 		return nil, err
 	}
 
-	// Write the request to the TCP stream.
-	err = c.writeReq(tc, req)
+	// Construct the response from the connection stream.
+	resp, err = c.constructResp(conn, req)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		c.cleanConn(tc)
+		c.connPools.Clean(req.URL.Host, conn)
 		return nil, err
-	}
-
-	// Construct the response from the TCP stream.
-	resp, err = c.constructResp(tc, req)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		c.cleanConn(tc)
 	}
 	return
-}
-
-// Put back the available connection of the specific host
-// for the future use.
-func (c *Client) putConn(tc *net.TCPConn, host string) {
-	// TODO
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	tcpConns, ok := c.tcpConnPool[host]
-	if ok {
-		tcpConns.PushBack(tc)
-		c.cond.Broadcast()
-	} else {
-		panic("not here")
-	}
-}
-
-// Get a TCP connection to the host.
-func (c *Client) getConn(host string) (tc *net.TCPConn, err error) {
-	// TODO
-	c.mu.Lock()
-	tcpConns, ok := c.tcpConnPool[host]
-	if !ok {
-		tcpConns = list.New()
-		c.tcpConnPool[host] = tcpConns
-	}
-
-	for tcpConns.Front() == nil && atomic.LoadInt64(&c.connSize) >= c.maxConnSize {
-		c.cond.Wait()
-	}
-
-	ele := tcpConns.Front()
-
-	if ele == nil {
-		// *** The following code should be here instead of the end of the block.
-		atomic.AddInt64(&c.connSize, 1)
-		c.mu.Unlock()
-
-		// New tcp connection
-		tcpAddr, err := net.ResolveTCPAddr("tcp", host)
-		if err != nil {
-			atomic.AddInt64(&c.connSize, -1)
-			return nil, err
-		}
-		tc, err = net.DialTCP("tcp", nil, tcpAddr)
-		if err != nil {
-			atomic.AddInt64(&c.connSize, -1)
-			return nil, err
-		}
-
-	} else {
-		// Reuse
-		tc = ele.Value.(*net.TCPConn)
-		tcpConns.Remove(ele)
-		c.mu.Unlock()
-	}
-	return tc, err
-}
-
-// Clean one connection in the case of errors.
-func (c *Client) cleanConn(tc *net.TCPConn) {
-	// TODO
-	tc.Close()
-	atomic.AddInt64(&c.connSize, -1)
-	c.cond.Broadcast()
 }
 
 // Write the request to TCP stream.
 //
 // The number of bytes in transmit body of a request must be more
 // than the value of Content-Length header. If not, throws an error.
-func (c *Client) writeReq(tcpConn *net.TCPConn, req *Request) (err error) {
+func (c *Client) writeReq(conn io.Writer, req *Request) (err error) {
 	// TODO
-	writer := bufio.NewWriterSize(tcpConn, ClientRequestBufSize)
+	writer := bufio.NewWriterSize(conn, ClientRequestBufSize)
 	reqLine := fmt.Sprintf("%s %s %s\n", req.Method, req.URL.Path, req.Proto)
 	_, err = writer.WriteString(reqLine)
 	if err != nil {
@@ -263,11 +213,11 @@ func (c *Client) writeReq(tcpConn *net.TCPConn, req *Request) (err error) {
 // Content-Length bytes.
 //
 // If TCP errors occur, err is not nil and req is nil.
-func (c *Client) constructResp(tcpConn *net.TCPConn, req *Request) (*Response, error) {
+func (c *Client) constructResp(conn io.Reader, req *Request) (*Response, error) {
 	// TODO
 	// Receive and prase repsonse message
 	resp := &Response{Header: make(map[string]string)}
-	reader := bufio.NewReaderSize(tcpConn, ClientResponseBufSize)
+	reader := bufio.NewReaderSize(conn, ClientResponseBufSize)
 	var wholeLine []byte
 	var lastWait = false
 	var step = ResponseStepStatusLine
@@ -286,7 +236,6 @@ LOOP:
 				case ResponseStepStatusLine:
 					{
 						statusLineWords := strings.SplitN(string(wholeLine), " ", 3)
-						// fmt.Println(statusLineWords)
 						resp.Proto = statusLineWords[0]
 						resp.StatusCode, err = strconv.Atoi(statusLineWords[1])
 						resp.Status = statusLineWords[2]
@@ -311,7 +260,7 @@ LOOP:
 							// Transfer the body to Response
 							resp.Body = &ResponseReader{
 								c:    c,
-								tc:   tcpConn,
+								conn: conn,
 								host: req.URL.Host,
 								r: &io.LimitedReader{
 									R: reader,

@@ -16,13 +16,13 @@ import (
 
 // Server host.
 const (
-	ServerAddr = "localhost:9000"
-	HTTPHost   = "http://" + ServerAddr
+	ServerHost = "localhost:9000"
+	HTTPHost   = "http://" + ServerHost
 )
 
-func setupYourServer() (server *Server, ch chan error) {
+func setupYourServer(network string) (server *Server, ch chan error) {
 	ch = make(chan error)
-	server = NewServer(ServerAddr)
+	server = NewServer(network, ServerHost)
 
 	// start server
 	go func() {
@@ -40,7 +40,7 @@ func setupGoServer() (server *go_http.Server, serverMux *go_http.ServeMux, ch ch
 	ch = make(chan error)
 	serverMux = go_http.NewServeMux()
 	server = &go_http.Server{
-		Addr:    ServerAddr,
+		Addr:    ServerHost,
 		Handler: serverMux,
 	}
 	go func() {
@@ -60,7 +60,7 @@ func setOKResponse(resp *Response) {
 }
 
 // Use golang standard client and your server to check your server.
-func checkYourServer(t *testing.T, client *go_http.Client, path string, method string,
+func useGoClient(t *testing.T, client *go_http.Client, path string, method string,
 	reqBodyData []byte, statusCode int, expectedRespBodyData []byte) {
 	url := HTTPHost + path
 	var resp *go_http.Response
@@ -78,6 +78,7 @@ func checkYourServer(t *testing.T, client *go_http.Client, path string, method s
 				url, resp.StatusCode, statusCode)
 		}
 		respBodyData, _ := ioutil.ReadAll(resp.Body)
+		resp.Body.Close()
 		if bytes.Compare(respBodyData, expectedRespBodyData) != 0 {
 			t.Fatalf("Get(%v) body=%v, expected=%v",
 				url, string(respBodyData), string(expectedRespBodyData))
@@ -86,7 +87,7 @@ func checkYourServer(t *testing.T, client *go_http.Client, path string, method s
 }
 
 // Use your client and golang standard server to check your client.
-func checkYourClient(t *testing.T, client *Client, path string, method string,
+func useYourClient(t *testing.T, client *Client, path string, method string,
 	reqBodyData []byte, statusCode int, expectedRespBodyData []byte) {
 	url := HTTPHost + path
 	var resp *Response
@@ -103,6 +104,7 @@ func checkYourClient(t *testing.T, client *Client, path string, method string,
 			t.Fatalf("Get(%v) status=%v, expected=%v", url, resp.StatusCode, statusCode)
 		}
 		respBodyData, _ := ioutil.ReadAll(resp.Body)
+		resp.Body.Close()
 		if bytes.Compare(respBodyData, expectedRespBodyData) != 0 {
 			t.Fatalf("Get(%v) body=%v, expected=%v", url, string(respBodyData), string(expectedRespBodyData))
 		}
@@ -165,7 +167,7 @@ func wrapGoValueFunc(value *int64) func(resp go_http.ResponseWriter, req *go_htt
 // * Serial GET (/value) and POST(/add) requests and responses.
 // * User-defined handler.
 func TestServerBasic(t *testing.T) {
-	server, sCloseChan := setupYourServer()
+	server, sCloseChan := setupYourServer("tcp")
 	c := new(go_http.Client)
 	var value int64
 
@@ -175,17 +177,17 @@ func TestServerBasic(t *testing.T) {
 
 	server.AddHandlerFunc("/value", wrapYourValueFunc(&value))
 
-	checkYourServer(t, c, "/add", MethodPost, []byte("10"), StatusOK, []byte(""))
+	useGoClient(t, c, "/add", MethodPost, []byte("10"), StatusOK, []byte(""))
 	if value != 10 {
 		t.Fatalf("value -> %v, expected %v", value, 10)
 	}
-	checkYourServer(t, c, "/value", MethodGet, []byte{}, StatusOK, []byte(strconv.Itoa(int(value))))
+	useGoClient(t, c, "/value", MethodGet, []byte{}, StatusOK, []byte(strconv.Itoa(int(value))))
 
-	checkYourServer(t, c, "/add", MethodPost, []byte("-5"), StatusOK, []byte(""))
+	useGoClient(t, c, "/add", MethodPost, []byte("-5"), StatusOK, []byte(""))
 	if value != 5 {
 		t.Fatalf("value -> %v, expected %v", value, 5)
 	}
-	checkYourServer(t, c, "/value", MethodGet, []byte{}, StatusOK, []byte(strconv.Itoa(int(value))))
+	useGoClient(t, c, "/value", MethodGet, []byte{}, StatusOK, []byte(strconv.Itoa(int(value))))
 
 	server.Close()
 	if err := <-sCloseChan; err == nil {
@@ -200,7 +202,7 @@ func TestServerBasic(t *testing.T) {
 // Test the concurrency feature of your server.
 func TestServerConcurrence(t *testing.T) {
 	runtime.GOMAXPROCS(8)
-	server, sCloseChan := setupYourServer()
+	server, sCloseChan := setupYourServer("tcp")
 	c := new(go_http.Client)
 	var value int64
 
@@ -259,7 +261,7 @@ func TestServerConcurrence(t *testing.T) {
 	if value != expectedValue {
 		t.Fatalf("value=%v, expected=%v", value, expectedValue)
 	}
-	checkYourServer(t, c, "/value", MethodGet, []byte{}, StatusOK, []byte(strconv.FormatInt(value, 10)))
+	useGoClient(t, c, "/value", MethodGet, []byte{}, StatusOK, []byte(strconv.FormatInt(value, 10)))
 
 	if elapsedMs > 500 {
 		t.Fatalf("%v concurent client requests cost too much time: %v, expected < %v\n", incrReqNum+decrReqNum, elapsedMs, 50)
@@ -286,19 +288,19 @@ func TestClientBasic(t *testing.T) {
 	serverMux.HandleFunc("/value", wrapGoValueFunc(&value))
 
 	fmt.Printf("Test: Your basic client ...\n")
-	c := NewClient()
+	c := NewClient("tcp")
 
-	checkYourClient(t, c, "/add", MethodPost, []byte("10"), StatusOK, []byte(""))
+	useYourClient(t, c, "/add", MethodPost, []byte("10"), StatusOK, []byte(""))
 	if value != 10 {
 		t.Fatalf("value -> %v, expected %v", value, 10)
 	}
-	checkYourClient(t, c, "/value", MethodGet, []byte{}, StatusOK, []byte(strconv.Itoa(int(value))))
+	useYourClient(t, c, "/value", MethodGet, []byte{}, StatusOK, []byte(strconv.Itoa(int(value))))
 
-	checkYourClient(t, c, "/add", MethodPost, []byte("-5"), StatusOK, []byte(""))
+	useYourClient(t, c, "/add", MethodPost, []byte("-5"), StatusOK, []byte(""))
 	if value != 5 {
 		t.Fatalf("value -> %v, expected %v", value, 5)
 	}
-	checkYourClient(t, c, "/value", MethodGet, []byte{}, StatusOK, []byte(strconv.Itoa(int(value))))
+	useYourClient(t, c, "/value", MethodGet, []byte{}, StatusOK, []byte(strconv.Itoa(int(value))))
 
 	server.Close()
 	if err := <-sCloseChan; err == nil {
@@ -317,7 +319,7 @@ func TestClientConcurrence(t *testing.T) {
 	serverMux.HandleFunc("/add", wrapGoAddFunc(&value))
 	serverMux.HandleFunc("/value", wrapGoValueFunc(&value))
 
-	c := NewClientSize(100)
+	c := NewClientSize("tcp", 100)
 
 	fmt.Printf("Test: Concurrent perf of your client ...\n")
 	incrReqNum, decrReqNum := 5000, 5000
@@ -377,7 +379,128 @@ func TestClientConcurrence(t *testing.T) {
 	if value != expectedValue {
 		t.Fatalf("value=%v, expected=%v", value, expectedValue)
 	}
-	checkYourClient(t, c, "/value", MethodGet, []byte{}, StatusOK, []byte(strconv.Itoa(int(value))))
+	useYourClient(t, c, "/value", MethodGet, []byte{}, StatusOK, []byte(strconv.Itoa(int(value))))
+
+	if elapsedMs > 500 {
+		t.Fatalf("%v concurent client requests cost too much time: %v, expected < %v\n", incrReqNum+decrReqNum, elapsedMs, 1000)
+	}
+
+	server.Close()
+	if err := <-sCloseChan; err == nil {
+		fmt.Printf("Server closed\n")
+	} else {
+		t.Fatalf("%v", err)
+	}
+	fmt.Printf("  ... Passed\n")
+}
+
+// Test basic functions of your client and server based on the unix domain socket.
+// * Serial GET (/value) and POST(/add) requests and responses.
+// * User-defined handler.
+func TestBasicUnix(t *testing.T) {
+	server, sCloseChan := setupYourServer("unix")
+	c := NewClient("unix")
+	var value int64
+
+	fmt.Printf("Test: Your basic server and server on unix domain socket...\n")
+
+	server.AddHandlerFunc("/add", wrapYourAddFunc(&value))
+
+	server.AddHandlerFunc("/value", wrapYourValueFunc(&value))
+
+	useYourClient(t, c, "/add", MethodPost, []byte("10"), StatusOK, []byte(""))
+	if value != 10 {
+		t.Fatalf("value -> %v, expected %v", value, 10)
+	}
+	useYourClient(t, c, "/value", MethodGet, []byte{}, StatusOK, []byte(strconv.Itoa(int(value))))
+
+	useYourClient(t, c, "/add", MethodPost, []byte("-5"), StatusOK, []byte(""))
+	if value != 5 {
+		t.Fatalf("value -> %v, expected %v", value, 5)
+	}
+	useYourClient(t, c, "/value", MethodGet, []byte{}, StatusOK, []byte(strconv.Itoa(int(value))))
+
+	server.Close()
+	if err := <-sCloseChan; err == nil {
+		fmt.Printf("Server closed\n")
+	} else {
+		t.Fatalf("%v", err)
+	}
+
+	fmt.Printf("  ... Passed\n")
+}
+
+// Test the concurrency feature of your client and server based on the unix
+// domain socket.
+func TestConcurrenceUnix(t *testing.T) {
+	server, sCloseChan := setupYourServer("unix")
+	c := NewClientSize("unix", 100)
+	var value int64
+
+	fmt.Printf("Test: Your concurrent server and server on unix domain socket...\n")
+
+	server.AddHandlerFunc("/add", wrapYourAddFunc(&value))
+
+	server.AddHandlerFunc("/value", wrapYourValueFunc(&value))
+
+	incrReqNum, decrReqNum := 5000, 5000
+	type Status struct {
+		flag bool
+		url  string
+		err  error
+	}
+
+	waitComplete := make(chan Status, incrReqNum+decrReqNum)
+	start := time.Now()
+	go func() {
+		for i := 0; i < incrReqNum; i++ {
+			go func(ii int) {
+				reqBodyData := []byte("1")
+				if resp, err := c.Post(HTTPHost+"/add", int64(len(reqBodyData)),
+					bytes.NewReader(reqBodyData)); err != nil || resp == nil {
+					waitComplete <- Status{flag: false, url: "/add", err: err}
+				} else {
+					resp.Body.Close()
+					waitComplete <- Status{flag: true}
+				}
+			}(i)
+		}
+	}()
+
+	go func() {
+		for i := 0; i < decrReqNum; i++ {
+			go func(ii int) {
+				reqBodyData := []byte("-1")
+				if resp, err := c.Post(HTTPHost+"/add", int64(len(reqBodyData)),
+					bytes.NewReader(reqBodyData)); err != nil || resp == nil {
+					waitComplete <- Status{flag: false, url: "/add", err: err}
+				} else {
+					resp.Body.Close()
+					waitComplete <- Status{flag: true}
+				}
+			}(i)
+		}
+	}()
+
+	for i := 0; i < cap(waitComplete); i++ {
+		select {
+		case status := <-waitComplete:
+			if !status.flag {
+				t.Fatalf("Get(%v) failed, error:%v", status.url, status.err)
+			}
+		case <-time.After(time.Millisecond * 500):
+			t.Fatalf("wait reply timeout")
+		}
+	}
+	elapsedMs := time.Since(start).Nanoseconds() / int64(time.Millisecond)
+
+	fmt.Printf("Cost: %v ms\n", elapsedMs)
+
+	expectedValue := int64(incrReqNum - decrReqNum)
+	if value != expectedValue {
+		t.Fatalf("value=%v, expected=%v", value, expectedValue)
+	}
+	useYourClient(t, c, "/value", MethodGet, []byte{}, StatusOK, []byte(strconv.Itoa(int(value))))
 
 	if elapsedMs > 500 {
 		t.Fatalf("%v concurent client requests cost too much time: %v, expected < %v\n", incrReqNum+decrReqNum, elapsedMs, 1000)
