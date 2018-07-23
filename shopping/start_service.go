@@ -2,6 +2,7 @@ package main
 
 import (
 	"distributed-system/twopc"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -40,65 +41,62 @@ func main() {
 		host_ips[strings.Split(addr.String(), "/")[0]] = struct{}{}
 	}
 
-	var err error
+	var resolveErr error
 	blocked := false
 	if *parti {
 		for _, pptAddr := range cfg.KVStoreAddrs {
-			if domain, _, err := net.SplitHostPort(pptAddr); err == nil {
-				if ips, err := net.LookupHost(domain); err == nil {
-					if _, ok := host_ips[ips[0]]; ok {
-						blocked = true
-						go shopping.NewShoppingTxnKVStoreService(cfg.Protocol, pptAddr, cfg.CoordinatorAddr)
-					} else {
-						fmt.Println("here")
-					}
-				} else {
-					fmt.Println(err)
-				}
+			if err := resolveAddr(host_ips, pptAddr); err == nil {
+				blocked = true
+				go shopping.NewShoppingTxnKVStoreService(cfg.Protocol, pptAddr, cfg.CoordinatorAddr)
 			} else {
-				fmt.Println(err)
+				resolveErr = err
 			}
 		}
 	}
 
 	if *coord {
-		if domain, _, err := net.SplitHostPort(cfg.CoordinatorAddr); err == nil {
-			if ips, err := net.LookupHost(domain); err == nil {
-				if _, ok := host_ips[ips[0]]; ok {
-					blocked = true
-					go shopping.NewShoppingTxnCoordinator(cfg.Protocol, cfg.CoordinatorAddr,
-						cfg.KVStoreAddrs, keyHashFunc, cfg.TimeoutMS)
-				} else {
-					fmt.Printf("%s doesn't apply in local network\n", ips[0])
-				}
-			} else {
-				fmt.Println(err)
-			}
+		if err := resolveAddr(host_ips, cfg.CoordinatorAddr); err == nil {
+			blocked = true
+			go shopping.NewShoppingTxnCoordinator(cfg.Protocol, cfg.CoordinatorAddr,
+				cfg.KVStoreAddrs, keyHashFunc, cfg.TimeoutMS)
 		} else {
-			fmt.Println(err)
+			resolveErr = err
 		}
 	}
 
 	if *web {
 		for _, appAddr := range cfg.APPAddrs {
-			if domain, _, err := net.SplitHostPort(appAddr); err == nil {
-				if ips, err := net.LookupHost(domain); err == nil {
-					if _, ok := host_ips[ips[0]]; ok {
-						blocked = true
-						go shopping.InitService(cfg.Protocol, appAddr, cfg.CoordinatorAddr, cfg.UserCSV, cfg.ItemCSV,
-							cfg.KVStoreAddrs, keyHashFunc)
-					}
-				}
+			if err := resolveAddr(host_ips, appAddr); err == nil {
+				blocked = true
+				go shopping.InitService(cfg.Protocol, appAddr, cfg.CoordinatorAddr, cfg.UserCSV, cfg.ItemCSV,
+					cfg.KVStoreAddrs, keyHashFunc)
+			} else {
+				resolveErr = err
 			}
 		}
 	}
+
 	if blocked {
 		block := make(chan bool)
 		<-block
 	} else {
-		if err != nil {
-			fmt.Println(err)
-		}
+		fmt.Println(resolveErr)
 		flag.PrintDefaults()
+	}
+}
+
+func resolveAddr(host_ips map[string]struct{}, addr string) error {
+	if domain, _, err := net.SplitHostPort(addr); err == nil {
+		if ips, err := net.LookupHost(domain); err == nil {
+			if _, ok := host_ips[ips[0]]; ok {
+				return nil
+			} else {
+				return errors.New(fmt.Sprintf("%s doesn't apply in local network\n", ips[0]))
+			}
+		} else {
+			return err
+		}
+	} else {
+		return err
 	}
 }
