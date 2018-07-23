@@ -1,3 +1,6 @@
+/*
+Package util provides basic utilities.
+*/
 package util
 
 import (
