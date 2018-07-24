@@ -12,7 +12,7 @@
 # could be more than one single service, which is all decided by cfg.json.
 #
 # The function test config below is isolated from the start_service, but 
-# actually it should keep the consistence.
+# actually it should keep the configs consistent.
 
 # Test config.
 export APP_HOST="localhost"
