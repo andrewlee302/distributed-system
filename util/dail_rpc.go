@@ -29,14 +29,15 @@ func RPCPoolCall(pool *ResourcePool, name string, args interface{}, reply interf
 	// 	atomic.AddInt64(&RPCCallNs, time.Since(now).Nanoseconds())
 	// }()
 	c := pool.Get().(*rpc.Client)
-	err := c.Call(name, args, reply)
-	if err == nil {
-		pool.Put(c)
-		return true
+	if c != nil {
+		ok := RPCCall(c, name, args, reply)
+		if ok {
+			pool.Put(c)
+		} else {
+			pool.Clean(c)
+		}
+		return ok
 	}
-	c.Close()
-	pool.Clean(c)
-	fmt.Println(err)
 	return false
 }
 
@@ -46,17 +47,20 @@ func RPCPoolArrayCall(pa *ResourcePoolsArray, i int, name string, args interface
 	// 	atomic.AddInt64(&RPCCallNs, time.Since(now).Nanoseconds())
 	// }()
 	c := pa.Get(i).(*rpc.Client)
-	err := c.Call(name, args, reply)
-	if err == nil {
-		pa.Put(i, c)
-		return true
+	if c != nil {
+		ok := RPCCall(c, name, args, reply)
+		if ok {
+			pa.Put(i, c)
+		} else {
+			pa.Clean(i, c)
+		}
+		return ok
 	}
-	c.Close()
-	pa.Clean(i, c)
-	fmt.Println(err)
 	return false
 }
 
+// RPCCall is the RPC utility for reusing. Note that if successfully, the channel won't
+// be closed.
 func RPCCall(c *rpc.Client, name string, args interface{}, reply interface{}) bool {
 	// now := time.Now()
 	// defer func() {
@@ -68,5 +72,18 @@ func RPCCall(c *rpc.Client, name string, args interface{}, reply interface{}) bo
 	}
 	c.Close()
 	fmt.Println(err)
+	return false
+}
+
+// Call is the one-time RPC communication utility. No matter successfully or
+// not, the channel will be closed.
+func Call(network, srv, name string, args interface{}, reply interface{}) bool {
+	if c := DialServer(network, srv); c != nil {
+		ok := RPCCall(c, name, args, reply)
+		if ok {
+			c.Close()
+		}
+		return ok
+	}
 	return false
 }
