@@ -52,6 +52,7 @@ We assume the followings:
 package shopping
 
 import (
+	kv "distributed-system/tinykv"
 	"distributed-system/twopc"
 	"encoding/csv"
 	"encoding/json"
@@ -59,7 +60,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"rush-shopping/kv"
 	"strconv"
 	"strings"
 	"sync"

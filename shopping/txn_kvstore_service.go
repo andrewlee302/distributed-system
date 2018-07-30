@@ -1,9 +1,9 @@
 package shopping
 
 import (
+	kv "distributed-system/tinykv"
 	"distributed-system/twopc"
 	"encoding/gob"
-	"rush-shopping/kv"
 	"sync"
 )
 

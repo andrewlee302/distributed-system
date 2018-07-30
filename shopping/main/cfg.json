@@ -9,7 +9,7 @@
         "127.0.0.1:11002",
         "127.0.0.1:11003"
     ],
-    "ItemCSV": "data/items.csv",
-    "UserCSV": "data/users.csv",
+    "ItemCSV": "../data/items.csv",
+    "UserCSV": "../data/users.csv",
     "TimeoutMS": 100
 }

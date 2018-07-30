@@ -1,10 +1,10 @@
 package shopping
 
 import (
+	kv "distributed-system/tinykv"
 	"distributed-system/twopc"
 	"distributed-system/util"
 	"net/rpc"
-	"rush-shopping/kv"
 )
 
 // CoordClients is the clients to connect to Coordinator.

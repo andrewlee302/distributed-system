@@ -1,7 +1,9 @@
 package main
 
 import (
+	"distributed-system/shopping"
 	"distributed-system/twopc"
+	"distributed-system/util"
 	"errors"
 	"flag"
 	"fmt"
@@ -9,8 +11,6 @@ import (
 	"net"
 	"os"
 	"runtime/pprof"
-	"rush-shopping/shopping"
-	"rush-shopping/util"
 	"strings"
 )
 
@@ -79,8 +79,11 @@ func main() {
 	if blocked {
 		block := make(chan bool)
 		<-block
-	} else {
+	} else if resolveErr != nil {
 		fmt.Println(resolveErr)
+		flag.PrintDefaults()
+	} else {
+		fmt.Println("You should indicate a specific service: -s -c -p.")
 		flag.PrintDefaults()
 	}
 }
