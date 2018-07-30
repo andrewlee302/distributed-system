@@ -525,11 +525,12 @@ func (px *Paxos) Status(seq int) (Fate, interface{}) {
 	}
 }
 
-// Kill shuts down this peer to make network failures for testing.
 //
 // -------------------- Start ---------------------
 // Please don't change the following four functions.
-func (px *Paxos) kill() {
+
+// Kill shuts down this peer to make network failures for testing.
+func (px *Paxos) Kill() {
 	atomic.StoreInt32(&px.dead, 1)
 	if px.l != nil {
 		px.l.Close()
