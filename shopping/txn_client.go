@@ -1,7 +1,7 @@
 package shopping
 
 import (
-	kv "distributed-system/tinykv"
+	"distributed-system/kv"
 	"distributed-system/twopc"
 	"distributed-system/util"
 	"net/rpc"
@@ -92,7 +92,6 @@ func NewShardsClientHub(network string, srvAddrs []string,
 
 // Put commands a put operation onto the specific shard.
 func (h *ShardsClientHub) Put(key string, value string) (ok bool, reply kv.Reply) {
-
 	args := &kv.PutArgs{Key: key, Value: value}
 	ok = util.RPCPoolArrayCall(h.pa, int(h.keyHashFunc(key))%h.shards, "ShoppingTxnKVStoreService.RPCPut", args, &reply)
 	return

@@ -52,7 +52,7 @@ We assume the followings:
 package shopping
 
 import (
-	kv "distributed-system/tinykv"
+	"distributed-system/kv"
 	"distributed-system/twopc"
 	"encoding/csv"
 	"encoding/json"

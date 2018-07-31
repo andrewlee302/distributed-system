@@ -1,24 +1,25 @@
 package shopping
 
 import (
-	kv "distributed-system/tinykv"
+	"distributed-system/kv"
+	"distributed-system/tinykv"
 	"distributed-system/twopc"
 	"encoding/gob"
 	"sync"
 )
 
 // ShoppingTxnKVStore supports the shopping transations. It wraps
-// the KV-Store with the shopping txn logics. The logics will be registered
+// the KV-store with the shopping txn logics. The logics will be registered
 // into the 2pc service, so the txns could be managed by the Coordinator
 // and the Parcipants.
 type ShoppingTxnKVStore struct {
-	*kv.KVStore
+	kv.KVStoreService
 	transRwLock sync.RWMutex
 }
 
 // NewShoppingTxnKVStore inits a new ShoppingTxnKVStore.
 func NewShoppingTxnKVStore() *ShoppingTxnKVStore {
-	tks := &ShoppingTxnKVStore{KVStore: kv.NewKVStore()}
+	tks := &ShoppingTxnKVStore{KVStoreService: tinykv.NewKVStore()}
 	return tks
 }
 
@@ -55,7 +56,7 @@ func NewShoppingTxnKVStoreService(network, addr, coordAddr string) *ShoppingTxnK
 	return service
 }
 
-// Serve starts the KV-Store service.
+// Serve starts the KV-store service.
 func (service *ShoppingTxnKVStoreService) Serve() {
 	// ?
 }
