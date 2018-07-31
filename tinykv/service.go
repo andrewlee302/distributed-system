@@ -9,6 +9,7 @@ which could wrap the KVStore and then enhance it.
 package tinykv
 
 import (
+	"distributed-system/kv"
 	"fmt"
 	"log"
 	"net"
@@ -178,7 +179,7 @@ func (ks *KVStore) Incr(key string, delta int) (newVal string, existed bool, err
 // flag is true. Otherwise, it's false.
 //
 // It's thread-safe and mutually exclusive with other operations.
-func (ks *KVStore) Del(key string) (existed bool) {
+func (ks *KVStore) Del(key string) (oldValue string, existed bool) {
 	now := time.Now()
 	defer func() {
 		atomic.AddInt64(&ks.costNs, time.Since(now).Nanoseconds())
@@ -186,32 +187,32 @@ func (ks *KVStore) Del(key string) (existed bool) {
 
 	ks.RwLock.Lock()
 	defer ks.RwLock.Unlock()
-	if _, existed = ks.data[key]; existed {
+	if oldValue, existed = ks.data[key]; existed {
 		delete(ks.data, key)
 	}
 	return
 }
 
 // RPCPut is the RPC interface for Put operation.
-func (ks *KVStore) RPCPut(args *PutArgs, reply *Reply) error {
+func (ks *KVStore) RPCPut(args *kv.PutArgs, reply *kv.Reply) error {
 	reply.Value, reply.Flag = ks.Put(args.Key, args.Value)
 	return nil
 }
 
 // RPCGet is the RPC interface for Get operation.
-func (ks *KVStore) RPCGet(args *GetArgs, reply *Reply) error {
+func (ks *KVStore) RPCGet(args *kv.GetArgs, reply *kv.Reply) error {
 	reply.Value, reply.Flag = ks.Get(args.Key)
 	return nil
 }
 
 // RPCIncr is the RPC interface for Incr operation.
-func (ks *KVStore) RPCIncr(args *IncrArgs, reply *Reply) (err error) {
+func (ks *KVStore) RPCIncr(args *kv.IncrArgs, reply *kv.Reply) (err error) {
 	reply.Value, reply.Flag, err = ks.Incr(args.Key, args.Delta)
 	return err
 }
 
 // RPCDel is the RPC interface for Del operation.
-func (ks *KVStore) RPCDel(args *DelArgs, reply *Reply) (err error) {
-	reply.Flag = ks.Del(args.Key)
+func (ks *KVStore) RPCDel(args *kv.DelArgs, reply *kv.Reply) (err error) {
+	reply.Value, reply.Flag = ks.Del(args.Key)
 	return nil
 }

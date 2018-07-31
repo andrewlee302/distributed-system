@@ -8,11 +8,9 @@ import (
 	"testing"
 )
 
-func checkCall(t *testing.T, ok bool, reply, expected Reply) {
-	if !ok {
-		t.Fatalf("call error")
-	} else if reply != expected {
-		t.Fatalf("wrong reply %v; expected %v", reply, expected)
+func checkCall(t *testing.T, val string, existed bool, expectedVal string, expectedFlag bool) {
+	if val != expectedVal || existed != expectedFlag {
+		t.Fatalf("wrong reply \"%v\" %v; expected \"%v\" %v", val, existed, expectedVal, expectedFlag)
 	}
 }
 
@@ -25,14 +23,14 @@ func TestBasic(t *testing.T) {
 
 	client := NewClient(srvAddr)
 
-	ok, reply := client.Get("key1")
-	checkCall(t, ok, reply, Reply{Flag: false, Value: ""})
+	value, existed := client.Get("key1")
+	checkCall(t, value, existed, "", false)
 
-	ok, reply = client.Put("key1", "1")
-	checkCall(t, ok, reply, Reply{Flag: false, Value: ""})
+	oldValue, existed := client.Put("key1", "1")
+	checkCall(t, oldValue, existed, "", false)
 
-	ok, reply = client.Get("key1")
-	checkCall(t, ok, reply, Reply{Flag: true, Value: "1"})
+	value, existed = client.Get("key1")
+	checkCall(t, value, existed, "1", true)
 	fmt.Printf("  ... Passed\n")
 }
 
@@ -53,8 +51,8 @@ func TestConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			ok, reply := client.Put("key"+strconv.Itoa(i), "1")
-			checkCall(t, ok, reply, Reply{Flag: false, Value: ""})
+			oldValue, existed := client.Put("key"+strconv.Itoa(i), "1")
+			checkCall(t, oldValue, existed, "", false)
 		}(i)
 	}
 	wg.Wait()
@@ -63,8 +61,8 @@ func TestConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			ok, reply := client.Get("key" + strconv.Itoa(i))
-			checkCall(t, ok, reply, Reply{Flag: true, Value: "1"})
+			value, existed := client.Get("key" + strconv.Itoa(i))
+			checkCall(t, value, existed, "1", true)
 		}(i)
 	}
 	wg.Wait()

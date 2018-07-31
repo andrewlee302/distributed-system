@@ -1,6 +1,7 @@
 package tinykv
 
 import (
+	"distributed-system/kv"
 	"distributed-system/util"
 	"fmt"
 	"net"
@@ -24,24 +25,39 @@ func NewClient(srvAddr string) *Client {
 	}
 	return &Client{SrvAddr: srvAddr, rpcClient: rpcClient}
 }
+
+func (c *Client) Get(key string) (value string, existed bool) {
+	args := &kv.GetArgs{Key: key}
+	var reply kv.Reply
+	util.RPCCall(c.rpcClient, "KVStoreService.RPCGet", args, &reply)
+	value, existed = reply.Value, reply.Flag
+	return
+}
+
+func (c *Client) Put(key string, value string) (oldValue string, existed bool) {
+	args := &kv.PutArgs{Key: key, Value: value}
+	var reply kv.Reply
+	util.RPCCall(c.rpcClient, "KVStoreService.RPCPut", args, &reply)
+	oldValue, existed = reply.Value, reply.Flag
+	return
+}
+
+func (c *Client) Incr(key string, delta int) (oldValue string, existed bool) {
+	args := &kv.IncrArgs{Key: key, Delta: delta}
+	var reply kv.Reply
+	util.RPCCall(c.rpcClient, "KVStoreService.RPCIncr", args, &reply)
+	oldValue, existed = reply.Value, reply.Flag
+	return
+}
+
+func (c *Client) Del(key string) (oldValue string, existed bool) {
+	args := &kv.DelArgs{Key: key}
+	var reply kv.Reply
+	util.RPCCall(c.rpcClient, "KVStoreService.RPCDel", args, &reply)
+	oldValue, existed = reply.Value, reply.Flag
+	return
+}
+
 func (c *Client) Close() {
 	c.rpcClient.Close()
-}
-
-func (c *Client) Put(key string, value string) (ok bool, reply Reply) {
-	args := &PutArgs{Key: key, Value: value}
-	ok = util.RPCCall(c.rpcClient, "KVStoreService.RPCPut", args, &reply)
-	return
-}
-
-func (c *Client) Get(key string) (ok bool, reply Reply) {
-	args := &GetArgs{Key: key}
-	ok = util.RPCCall(c.rpcClient, "KVStoreService.RPCGet", args, &reply)
-	return
-}
-
-func (c *Client) Incr(key string, delta int) (ok bool, reply Reply) {
-	args := &IncrArgs{Key: key, Delta: delta}
-	ok = util.RPCCall(c.rpcClient, "KVStoreService.RPCIncr", args, &reply)
-	return
 }
