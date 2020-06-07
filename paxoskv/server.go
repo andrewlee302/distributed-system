@@ -14,9 +14,9 @@ the State Machine to log the actions on the data is a popular way to write
 and read the data. Because we needn't modify the data directly, we could
 undo the ops to recover the data, or replay ops to make a replication.
 
-Refer to the chapter 3 "Implementing a State Machine" in "Paxos Made Simple"
-about how to use a state machine to represent the states in a system. Likewise,
-the key-value pairs are values of the KV-store.
+Refer to the chapter 3 "Implementing a State Machine" in Leslie Lamport's
+paper "Paxos Made Simple" about how to use a state machine to represent the
+states in a system. Likewise, the key-value pairs are values of the KV-store.
 */
 package paxoskv
 
@@ -61,9 +61,10 @@ type KVPaxos struct {
 	px         *paxos.Paxos
 
 	// Your definitions here.
-	content map[string]string
-	seq     int // seq for next req
-	history map[int64]bool
+	content    map[string]string
+	appliedSeq int32
+	seq        int32 // seq for next req
+	history    map[int64]bool
 }
 
 // apply reflects the operation to the key-value pairs in the KV-store.
@@ -110,9 +111,9 @@ func (kv *KVPaxos) TryDecide(op Op) (string, string) {
 			case paxos.Chosen:
 				{
 					_op := v.(Op)
-					kv.px.Done(kv.seq)
-					kv.apply(&_op)
-					kv.seq++
+					// kv.px.Done(kv.seq)
+					// kv.apply(&_op)
+					atomic.AddInt32(&kv.seq, 1)
 					if _op.ID == op.ID {
 						if _op.OpName == Get {
 							if v, ok := kv.content[op.Key]; ok {

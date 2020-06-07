@@ -76,7 +76,7 @@ import (
 
 // BUG():.
 
-// TODO. Slot distrubiting for parallel txns.
+// TODO. Slot distributing for parallel txns.
 
 // Coordinator is the manager role of two-phase commit.
 type Coordinator struct {

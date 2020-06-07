@@ -82,7 +82,7 @@ func checkmax(t *testing.T, pxa []*Paxos, seq int, max int) {
 func cleanup(pxa []*Paxos) {
 	for i := 0; i < len(pxa); i++ {
 		if pxa[i] != nil {
-			pxa[i].kill()
+			pxa[i].Kill()
 		}
 	}
 }

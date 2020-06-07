@@ -127,6 +127,7 @@ type Proposer struct {
 	seq          int
 	proposeValue interface{}
 	isDead       bool
+	proposalN    int
 }
 
 // PrepareArgs is Prepare RPC args.
@@ -181,7 +182,7 @@ func (proposerMgr *proposerManager) runProposer(seq int, v interface{}) {
 		if seq > proposerMgr.seqMax {
 			proposerMgr.seqMax = seq
 		}
-		prop := &Proposer{mgr: proposerMgr, seq: seq, proposeValue: v, isDead: false}
+		prop := &Proposer{mgr: proposerMgr, seq: seq, proposeValue: v, isDead: false, proposalN: proposerMgr.me}
 		proposerMgr.proposers[seq] = prop
 		go func() {
 			prop.Propose()
@@ -208,9 +209,9 @@ func (px *Paxos) Prepare(args *PrepareArgs, reply *PrepareReply) error {
 	acceptor := px.acceptorMgr.getInstance(args.Seq)
 	acceptor.mu.Lock()
 	defer acceptor.mu.Unlock()
-	if args.N > acceptor.nP {
+	if args.N > acceptor.nP { // optimization in "Paxos made simple".
 		reply.Succ = true
-		acceptor.nP = args.N
+		acceptor.nP = args.N // control the future instead of predicating the future.
 		reply.N = args.N
 		reply.NA = acceptor.nA
 		reply.VA = acceptor.vA
@@ -255,15 +256,14 @@ func (proposer *Proposer) Propose() {
 	peersNum := len(proposer.mgr.peers)
 	majorityNum := peersNum/2 + 1
 
-	proposeNum := proposer.mgr.me
 	for !proposer.isDead {
-		nextProposeNum := proposeNum
+		nextProposeNum := proposer.proposalN
 		// prepare request
 		prepareReplies := make(chan PrepareReply, peersNum)
 		prepareBarrier := make(chan bool)
 		for me, peer := range proposer.mgr.peers {
 			go func(me int, peer string) {
-				args := &PrepareArgs{Seq: proposer.seq, N: proposeNum}
+				args := &PrepareArgs{Seq: proposer.seq, N: proposer.proposalN}
 				var reply PrepareReply
 
 				// avoid the situation that local rpc is fragile, however the acceptor should prepare value that itself issued.
@@ -302,6 +302,9 @@ func (proposer *Proposer) Propose() {
 				}
 			}
 
+			// TODO
+			// if nextProposeNum is larger than proposer.proposalN, stop this iteration and set a new proposer.proposalN, then keep going on.
+
 			// accept request
 			acceptReplies := make(chan AcceptReply, peersNum)
 			acceptBarrier := make(chan bool)
@@ -316,7 +319,7 @@ func (proposer *Proposer) Propose() {
 			}
 			for me, peer := range proposer.mgr.peers {
 				go func(me int, peer string) {
-					args := &AcceptArgs{Seq: proposer.seq, N: proposeNum, V: acceptReqValue}
+					args := &AcceptArgs{Seq: proposer.seq, N: proposer.proposalN, V: acceptReqValue}
 					var reply AcceptReply
 					// same reason
 					succ := true
@@ -376,10 +379,10 @@ func (proposer *Proposer) Propose() {
 			nextProposeNum = tryNum + peersNum
 		}
 		// assertion: next_propose_num become bigger
-		if nextProposeNum <= proposeNum || nextProposeNum%peersNum != proposer.mgr.me {
+		if nextProposeNum <= proposer.proposalN || nextProposeNum%peersNum != proposer.mgr.me {
 			log.Fatalln("unexpected error!!!")
 		}
-		proposeNum = nextProposeNum
+		proposer.proposalN = nextProposeNum
 
 		// TODO
 		// sleep for avoiding thrashing of proposing
