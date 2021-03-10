@@ -61,10 +61,9 @@ type KVPaxos struct {
 	px         *paxos.Paxos
 
 	// Your definitions here.
-	content    map[string]string
-	appliedSeq int32
-	seq        int32 // seq for next req
-	history    map[int64]bool
+	content map[string]string
+	seq     int // seq for next req
+	history map[int64]bool
 }
 
 // apply reflects the operation to the key-value pairs in the KV-store.
@@ -111,9 +110,9 @@ func (kv *KVPaxos) TryDecide(op Op) (string, string) {
 			case paxos.Chosen:
 				{
 					_op := v.(Op)
-					// kv.px.Done(kv.seq)
-					// kv.apply(&_op)
-					atomic.AddInt32(&kv.seq, 1)
+					kv.px.Done(kv.seq)
+					kv.apply(&_op)
+					kv.seq++
 					if _op.ID == op.ID {
 						if _op.OpName == Get {
 							if v, ok := kv.content[op.Key]; ok {

@@ -2,7 +2,6 @@ package paxoskv
 
 import (
 	"crypto/rand"
-	"distributed-system/kv"
 	"distributed-system/util"
 	"math/big"
 )
@@ -32,13 +31,13 @@ func MakeClient(servers []string) *Client {
 // Get gets the corresponding value for the specific key. Return "" if the
 // key doesn't exist. It tries forever in the face of all other errors (i.e.
 // except for OK and ErrNoKey).
-func (ck *Client) Get(key string) (value string, existed bool) {
+func (ck *Client) Get(key string) string {
 	// TODO Your code here
 	args := &GetArgs{Key: key, ID: nrand()}
 	var reply GetReply
 	for i := 0; ; {
 		if ok := util.Call("unix", ck.servers[i], "KVPaxos.Get", args, &reply); ok && (reply.Err == OK || reply.Err == ErrNoKey) {
-			return "", reply.Value
+			return reply.Value
 		}
 		i++
 		i %= len(ck.servers)
@@ -47,7 +46,7 @@ func (ck *Client) Get(key string) (value string, existed bool) {
 
 // PutAppend puts or append a value onto the specific key. Op arg indicates
 // the type of operations, "Put" or "Append".
-func (ck *Client) PutAppend(key string, value string, op string) (ok bool, reply kv.Reply) {
+func (ck *Client) PutAppend(key string, value string, op string) {
 	// TODO Your code here
 	args := &PutAppendArgs{Key: key, Value: value, Op: op, ID: nrand()}
 	var reply PutAppendReply
@@ -61,15 +60,11 @@ func (ck *Client) PutAppend(key string, value string, op string) (ok bool, reply
 }
 
 // Put puts the key-value pair into the database.
-func (ck *Client) Put(key string, value string) (oldValue string, existed bool) {
+func (ck *Client) Put(key string, value string) {
 	ck.PutAppend(key, value, "Put")
 }
 
 // Append a value to the original value of the specific key.
-func (ck *Client) Append(key string, value string) (oldValue string, existed bool) {
+func (ck *Client) Append(key string, value string) {
 	ck.PutAppend(key, value, "Append")
-}
-
-func (ck *Client) Del(key string) (oldValue string, existed bool) {
-
 }
